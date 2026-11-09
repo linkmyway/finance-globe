@@ -36,3 +36,10 @@ private archive.
 
 See [`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md) for the data
 tiers, sources and the mobile optimisation ledger.
+
+## Reference code
+
+The [`reference/`](reference/) folder contains a reference
+implementation of the core mechanisms, written from the documented
+method (the production app runs on a hosted platform whose source is
+not exportable).
