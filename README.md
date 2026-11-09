@@ -8,6 +8,14 @@
 - 参考代码：[`reference/`](reference/)（国家配色表单一事实源、弧线粒子动画、数据分层；`npm install && npm run typecheck` 可直接验）
 - 本仓只有方法与脱敏说明；真实数据快照不在本仓（存放在私有存档仓）
 
+## 效果图 / Screenshots
+
+运行中界面的实拍（2026-11-09；画面里的数字是截图那一刻的快照）：
+
+![桌面端](docs/images/desktop.png)
+
+![移动端](docs/images/mobile.png)
+
 A night-side 3D earth that turns macro data into geography: population-
 weighted city lights, the world's financial centres as nodes, and
 flowing arcs between them whose **colours encode the country** and whose
