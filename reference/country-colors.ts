@@ -62,6 +62,10 @@ function rgbToHex([r, g, b]: [number, number, number]): string {
  * along their length — particles and comet tails sample this same
  * function, and the arrival ripple uses the destination colour.
  */
+/** @example
+ * arcColorAt("US", "US", 0.5) // → "#38b6e8" (pure origin colour)
+ * arcColorAt("US", "CN", 0)   // → "#38b6e8"; arcColorAt("US", "CN", 1) // → "#e8544a"
+ */
 export function arcColorAt(fromCountry: string, toCountry: string, t: number): string {
   const a = hexToRgb(countryStyle(fromCountry).color);
   const b = hexToRgb(countryStyle(toCountry).color);
@@ -79,6 +83,7 @@ export type Tier = 1 | 2 | 3;
 const TIER1 = new Set(["US", "GB", "HK", "SG", "JP", "CN"]);
 const TIER3 = new Set(["ZA", "BR", "RU", "IN"]);
 
+/** @example arcTier("US", "JP") → 1; arcTier("US", "DE") → 2; arcTier("US", "IN") → 3 */
 export function arcTier(fromCountry: string, toCountry: string): Tier {
   if (TIER3.has(fromCountry) || TIER3.has(toCountry)) return 3;
   if (TIER1.has(fromCountry) && TIER1.has(toCountry)) return 1;
