@@ -1,20 +1,15 @@
+**English** | [简体中文](README.zh-CN.md)
+
 # Finance Globe — a 3D macro-finance globe
 
-## 中文说明
+## Screenshots
 
-3D 地球宏观金融监控仪的实现方法开源版：会转的地球上，利率、汇率、股指和城市灯光一起看。
+Live UI captures (2026-11-09; the figures shown are a snapshot of
+that moment):
 
-- 实现文档：[`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md)（暖色阳光光照模型、国家分色弧线与彗星粒子、快慢分层数据刷新、来源标注规矩）
-- 参考代码：[`reference/`](reference/)（国家配色表单一事实源、弧线粒子动画、数据分层；`npm install && npm run typecheck` 可直接验）
-- 本仓只有方法与脱敏说明；真实数据快照不在本仓（存放在私有存档仓）
+![Desktop](docs/images/desktop.png)
 
-## 效果图 / Screenshots
-
-运行中界面的实拍（2026-11-09；画面里的数字是截图那一刻的快照）：
-
-![桌面端](docs/images/desktop.png)
-
-![移动端](docs/images/mobile.png)
+![Mobile](docs/images/mobile.png)
 
 A night-side 3D earth that turns macro data into geography: population-
 weighted city lights, the world's financial centres as nodes, and
