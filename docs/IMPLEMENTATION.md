@@ -256,3 +256,11 @@ section governs.
 - Edges: the red line — speed never comes from cutting globe detail
   or effects; every optimisation ships with before/after
   measurements.
+
+## Sync note (2026-11-12, covering the 2026-11-11 Space changes)
+
+- **Arc topology sparsification**: the eight tier-1 cities moved from a full mesh (28 arcs) to "each city connects to its 3 nearest peers + 2 intercontinental trunks", taking the network from 48 to 35 logical arcs. Hub arcs, endpoints and the strength encoding are unchanged.
+- **Regional palette**: hues are spread following D3 category / Okabe-Ito / Tol bright references, assigned per region within one lightness/chroma band (three anchor colours kept). Cross-region arcs gradient between their endpoint colours; same-region arcs are solid. Sharpening was done by parameters only, no layers removed: narrower glow sheath and halo, brighter core, halved breathing modulation.
+- **Laser arc effects**: the core-line shader adds two sharp sweeping light bands (white-hot where they pass) plus randomised spark flashes; flow particles became bidirectional with arrival ripples, plus a spark layer along the arcs — all GPU-shader driven on a shared clock, with no increase in particle count.
+- **Exchange boards**: 13 → 11 boards (Sydney ASX 200, Toronto TSX and São Paulo Bovespa removed); New York now carries two boards (S&P 500 and Nasdaq-100, offset anchors with leader lines back to the New York node); the six Asian boards became compact single-line chips with geographic pre-offsets before entering the collision pool. Board anchor radius was raised with surface nodes and short leader lines, and textures are supersampled with anisotropy to stay sharp. City local-time label offsets were tightened in three width tiers.
+- The dashboard export shape is unchanged (same payload keys as the previous round).
