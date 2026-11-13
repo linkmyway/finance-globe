@@ -1,0 +1,181 @@
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap');
+@import "tailwindcss";
+@import "tailwindcss-safe-area";
+
+@theme {
+  --text-xs: 12px;
+  --text-xs--line-height: 16px;
+  --text-sm: 14px;
+  --text-sm--line-height: 20px;
+  --text-base: 16px;
+  --text-base--line-height: 24px;
+  --text-lg: 18px;
+  --text-lg--line-height: 28px;
+  --text-xl: 20px;
+  --text-xl--line-height: 28px;
+  --text-2xl: 24px;
+  --text-2xl--line-height: 32px;
+  --text-3xl: 30px;
+  --text-3xl--line-height: 36px;
+  --text-4xl: 36px;
+  --text-4xl--line-height: 40px;
+  --text-5xl: 48px;
+  --text-5xl--line-height: 52px;
+}
+
+:root {
+  color-scheme: dark;
+  --bg: #040814;
+  --surface: rgba(11, 21, 38, 0.72);
+  --surface-solid: #0b1526;
+  --text: #dbe7f5;
+  --dim: #7d90ad;
+  --border: rgba(94, 148, 205, 0.22);
+  --accent: #38e1ff;
+  --gold: #ffc45e;
+  --red: #ff6b6b;
+  --green: #3ddc97;
+  --radius: 14px;
+  --space-surface: var(--surface);
+  --space-surface-alt: var(--surface);
+  --space-muted: var(--dim);
+  --space-border: var(--border);
+  --space-accent: var(--accent);
+}
+
+html {
+  background: var(--bg);
+  /* 横向锁定兜底（2026-11-13）：出界者已在名卡层源头修复，此处
+     只作最后一道闸——clip 不建滚动容器、不影响 fixed/纵向滚动 */
+  overflow-x: hidden;
+  overflow-x: clip;
+}
+
+body {
+  font-family: "Noto Sans SC", system-ui, -apple-system, "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  color: var(--text);
+  overflow-x: hidden;
+  overflow-x: clip;
+}
+
+.font-display {
+  font-family: "Noto Serif SC", "Songti SC", serif;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+.glass {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow:
+    inset 0 1px 0 rgba(160, 210, 255, 0.09),
+    inset 0 0 0 1px rgba(56, 160, 255, 0.04),
+    0 0 22px rgba(56, 140, 255, 0.06);
+}
+
+/* 涨跌辉光（克制：只给文字一层光晕，不铺色块） */
+.glow-up {
+  text-shadow: 0 0 9px rgba(255, 107, 107, 0.55);
+}
+.glow-down {
+  text-shadow: 0 0 9px rgba(61, 220, 151, 0.5);
+}
+
+/* 行情跑马灯：transform 平移循环，无布局抖动 */
+@keyframes marquee-x {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+.marquee-track {
+  animation: marquee-x 48s linear infinite;
+  will-change: transform;
+}
+
+/* 顶栏刷新转圈：一枚 14px 细环，颜色取 currentColor（状态字处金色、
+   刷新钮处随按钮文字色），刷新进行时匀速旋转，组件卸载即停 */
+@keyframes spin-ring {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.refresh-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border-radius: 9999px;
+  border: 2px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-top-color: currentColor;
+  animation: spin-ring 0.8s linear infinite;
+}
+@keyframes spinner-breathe {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* 后台刷新后变化值的就地高亮：青色辉光闪一下（约 1.2 秒）后回到常态，
+   只动颜色不动布局，用户能感知「这条刚更新」 */
+@keyframes value-flash {
+  0% {
+    color: #8ef1ff;
+    text-shadow: 0 0 10px rgba(56, 225, 255, 0.8);
+  }
+  100% {
+  }
+}
+.value-flash {
+  animation: value-flash 1.2s ease-out both;
+}
+
+/* 小结卡弹出：淡入 + 轻微上浮 */
+@keyframes card-pop {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.card-pop {
+  animation: card-pop 0.38s cubic-bezier(0.22, 0.9, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .refresh-spinner {
+    animation: spinner-breathe 1.6s ease-in-out infinite;
+  }
+  .marquee-track {
+    animation: none;
+  }
+  .card-pop {
+    animation: none;
+  }
+  .value-flash {
+    animation: none;
+  }
+}
+
+.stars-bg {
+  background:
+    radial-gradient(ellipse 90% 55% at 70% -10%, rgba(56, 120, 246, 0.16), transparent 60%),
+    radial-gradient(ellipse 70% 50% at 10% 110%, rgba(255, 94, 138, 0.07), transparent 60%),
+    linear-gradient(180deg, #040814 0%, #060c1e 55%, #040814 100%);
+}
