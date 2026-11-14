@@ -12,7 +12,21 @@ import { SafeAreaTopScrim } from "@hatch/space-sdk/client";
 import { api, type ApiResponse } from "./api";
 import type { CenterInfo, CountryCode, IndexBoardInfo } from "./Globe";
 import { REGION_LEGEND, regionColorFor } from "./nationColors";
-import { moonPhaseAt } from "./moonPhase";
+import {
+eclipticAltAzTokyo,
+eclipseOutlook,
+moonEcliptic,
+moonPhaseAt,
+nextTokyoMidnight,
+planetGeocentricEcliptic,
+sunGeocentricEcliptic,
+tideInfoAt,
+TONIGHT_PLANETS,
+zodiacSignFor,
+ZODIAC_SIGNS,
+type EclipticCoord,
+type EclipseVisibility,
+} from "./moonPhase";
 import {
 CABLES,
 CABLE_CONTINENT_LABEL,
@@ -79,7 +93,8 @@ interface CountryCapDecomp {
   /** "12m" 近 12 个月（2026-11-14 起的标准窗口）/
    *  "full" 从最早记录算到现在 / "30d" 最近 30 天 /
    *  "sinceStart" 记录还不满 30 天、从开始记录以来 /
-   *  "calibrated" 中国行只从 2025-07-31 开始算 /
+   *  "calibrated" 名单稳定下来之后开始算（中国行锚点
+   *  2025-07-31、日本行锚点 2026-08-30）/
    *  "mixed" 七行合计、各行按自己开始算的日期汇总 */
   basis: "12m" | "full" | "30d" | "sinceStart" | "calibrated" | "mixed";
   baseDate: string;
@@ -116,8 +131,9 @@ interface CountryCapRow {
   /** 与 spark 平行：该点是否为 2023 年早期存档点（收录公司远
    *  少于现在，只作水位参考，线段以虚线淡色绘制） */
   sparkEarly?: boolean[];
-  /** 近 12 个月涨了多少（2026-11-14 起统一为近 12 个月窗口；
-   *  CN+TW 行的窗口在 2025-07-31 校准锚点之后） */
+  /** 涨了多少（2026-11-14 起统一为近 12 个月窗口；CN+TW 行的
+   *  窗口在 2025-07-31 校准锚点之后；JP 行自 2026-11-14 起改按
+   *  校准窗口：2026-08-30 锚点 → 最新） */
   changePct?: number | null;
   windowDays?: number;
   changeBasis?:
@@ -128,8 +144,8 @@ interface CountryCapRow {
     | "calibrated"
     | "mixed"
     | null;
-  /** 中国行的分界日期（仅 CN+TW 行非空）：走势线在此日期之前
-   *  的段落统计的公司不一样，以虚线区隔、不算进涨跌 */
+  /** 校准行的分界日期（CN+TW 与 JP 行非空）：走势线在此日期
+   *  之前的段落统计的公司不一样，以虚线区隔、不算进涨跌 */
   calibrationAnchor?: string | null;
   decomp?: CountryCapDecomp | null;
 }
@@ -482,14 +498,85 @@ function TokyoClock() {
   );
 }
 
+/** JST 日期（带年）与时刻格式化：月食一节专用（年份不可省） */
+const fmtJstDayFull = (d: Date): string =>
+  new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+  }).format(d);
+const fmtJstTime = (d: Date): string =>
+  new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Tokyo",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(d);
+
 /**
- * 月相卡（2026-11-13）：月盘按当前相位精确画明暗界线（北半球视角，
- * 盈月亮面在右、亏月在左）。相位不查表不写死：moonPhaseAt 用与
- * Globe 太阳系月球同一条 Meeus 月球黄经公式 + 同一套 JPL 地球根
- * 数算日月距角，打开/每分钟重算即为当时真值——卡上画的上弦，
- * 球上的月亮也是上弦（同源一致）。月盘画法：亮半圆盘 + 椭圆明暗
- * 界线（界线椭圆横半径 = R·cos 距角，符号随距角自然分出眉/凸），
- * 采样折线成path，任意相位角下界线形状精确。
+ * 月食一节的单条行：日期（食甚 JST 日）+ 类型 + 东京可见性。
+ * 可见时列全接触时刻（JST）；不可见如实标注食甚时月亮在地平线下
+ * 及其高度，不给任何「部分可见」的含糊话。
+ */
+function EclipseRow({
+  caption,
+  v,
+}: {
+  caption: string;
+  v: EclipseVisibility;
+}) {
+  const e = v.eclipse;
+  return (
+    <div>
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="shrink-0 text-[var(--dim)]">{caption}</span>
+        <span className="num text-right font-medium">
+          {fmtJstDayFull(v.greatest)} · {e.type}
+        </span>
+      </div>
+      {v.visibleInTokyo ? (
+        <>
+          <p className="num mt-0.5 text-right text-xs text-[#eaf3ff]">
+            东京可见 · 食甚 {fmtJstTime(v.greatest)}（月高{" "}
+            {v.altAtGreatestDeg.toFixed(0)}°）
+          </p>
+          <p className="num mt-0.5 text-right text-[11px] leading-relaxed text-[var(--dim)]">
+            {e.contacts
+              .map((c) => `${c.label} ${fmtJstTime(new Date(c.utc))}`)
+              .join(" · ")}
+          </p>
+          {e.type === "半影月食" ? (
+            <p className="mt-0.5 text-right text-[11px] text-[var(--dim)]">
+              半影食分 {e.penMag.toFixed(3)}
+              {e.penMag < 0.05 ? " · 食分极小，肉眼几乎察觉不到" : ""}
+            </p>
+          ) : null}
+        </>
+      ) : (
+        <p className="num mt-0.5 text-right text-xs text-[var(--dim)]">
+          东京不可见 · 食甚 {fmtJstTime(v.greatest)}{" "}
+          时月亮在地平线下（{v.altAtGreatestDeg.toFixed(0)}°）
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 月相卡（2026-11-13 建；2026-11-14 扩：日式月名 + 潮汐 + 月食）：
+ * 月盘按当前相位精确画明暗界线（北半球视角，盈月亮面在右、亏月
+ * 在左）。相位不查表不写死：moonPhaseAt 用与 Globe 太阳系月球同一
+ * 条 Meeus 月球黄经公式 + 同一套 JPL 地球根数算日月距角，打开/每
+ * 分钟重算即为当时真值——卡上画的三日月，球上的月亮也是三日月
+ * （同源一致）。月盘画法：亮半圆盘 + 椭圆明暗界线（界线椭圆横半
+ * 径 = R·cos 距角，符号随距角自然分出眉/凸），采样折线成 path，
+ * 任意相位角下界线形状精确。
+ * 相位名 2026-11-14 起全套日本传统月名（新月→三日月→上弦の月→
+ * 十三夜月→満月→居待月→下弦の月→有明の月，用户点名峨眉月档用
+ * 日本版）。潮汐一节同源月齢算出（潮名对照表见 moonPhase.ts）；
+ * 月食一节为 NASA canon 策展数据（2027–2029 八条），东京可见性
+ * 由同一星历算食甚时月球高度判定，不抄区域描述。
  */
 function MoonPhaseCard() {
   const [now, setNow] = useState(() => new Date());
@@ -498,6 +585,8 @@ function MoonPhaseCard() {
     return () => clearInterval(id);
   }, []);
   const ph = moonPhaseAt(now);
+  const tide = tideInfoAt(now);
+  const ecl = eclipseOutlook(now);
   const R = 44;
   const C = 50;
   const phi = (ph.elongationDeg * Math.PI) / 180;
@@ -584,93 +673,617 @@ function MoonPhaseCard() {
               <dd className="num font-medium">{ph.ageDays.toFixed(1)} 天</dd>
             </div>
             <div className="flex justify-between gap-3">
-              <dt className="text-[var(--dim)]">下一次满月</dt>
+              <dt className="text-[var(--dim)]">次の満月</dt>
               <dd className="num font-medium">{fmtDay(ph.nextFull)}</dd>
             </div>
             <div className="flex justify-between gap-3">
-              <dt className="text-[var(--dim)]">下一次新月</dt>
+              <dt className="text-[var(--dim)]">次の新月</dt>
               <dd className="num font-medium">{fmtDay(ph.nextNew)}</dd>
             </div>
           </dl>
         </div>
       </div>
+      <div className="mt-4 space-y-2 border-t border-[var(--border)] pt-3">
+        <div className="flex items-baseline justify-between gap-2">
+          <h3 className="text-sm font-semibold text-[#eaf3ff]">潮汐</h3>
+          <span className="text-[11px] text-[var(--dim)]">
+            按月齢推算 · 日本潮名
+          </span>
+        </div>
+        <dl className="space-y-1 text-sm">
+          <div className="flex justify-between gap-3">
+            <dt className="text-[var(--dim)]">今日潮名</dt>
+            <dd className="font-medium">{tide.today}</dd>
+          </div>
+          <div className="flex justify-between gap-3">
+            <dt className="text-[var(--dim)]">大潮开始</dt>
+            <dd className="num font-medium">{fmtDay(tide.nextSpringStart)}</dd>
+          </div>
+          <div className="flex justify-between gap-3">
+            <dt className="text-[var(--dim)]">小潮开始</dt>
+            <dd className="num font-medium">{fmtDay(tide.nextNeapStart)}</dd>
+          </div>
+        </dl>
+      </div>
+      {ecl ? (
+        <div className="mt-4 space-y-2 border-t border-[var(--border)] pt-3">
+          <div className="flex items-baseline justify-between gap-2">
+            <h3 className="text-sm font-semibold text-[#eaf3ff]">月食</h3>
+            <span className="text-[11px] text-[var(--dim)]">
+              时刻为日本时间
+            </span>
+          </div>
+          <div className="space-y-2.5 text-sm">
+            <EclipseRow caption="下一次月食" v={ecl.next} />
+            {ecl.nextVisibleInTokyo ? (
+              <EclipseRow caption="东京可见 · 下一次" v={ecl.nextVisibleInTokyo} />
+            ) : null}
+            {ecl.nextVisibleTotalInTokyo ? (
+              <EclipseRow
+                caption="东京可见 · 下一次皆既"
+                v={ecl.nextVisibleTotalInTokyo}
+              />
+            ) : null}
+          </div>
+        </div>
+      ) : null}
       <p className="mt-3 text-[11px] leading-relaxed text-[var(--dim)]">
-        来源：天文算法实时计算（月球黄经 Meeus 低精度历表，与太阳系
-        3D 月球同源）· 按打开时刻每分钟重算
+        来源：月相与潮汐为天文算法实时计算（月球黄经 Meeus
+        低精度历表，与太阳系 3D 月球同源）· 月食数据 NASA 月食
+        canon（Espenak &amp; Meeus，2027–2029）· 按打开时刻每分钟重算
       </p>
     </section>
   );
 }
 
 /**
- * 回到顶部悬浮按钮（2026-11-13，用户：页面太长了）：固定右下角的
- * 玻璃小钮，滚过约一屏半才淡入出现、顶部时藏起；点按平滑滚回最
- * 上方（reduced-motion 时直接跳）。太阳系模式没有页面滚动，
- * scrollY 不动，自然不会出现。
+ * 今晚黄道卡（2026-11-14 新增，与月相卡同一组天文卡，紧跟其后）：
+ * 照用户给的「午夜面向南方」示意图画法——地平线横贯（左东、中
+ * 南、右西），黄道弧跨过南天，地平线以下走虚线、太阳标在下方。
+ * 内容全按实况算：时点取下一个东京午夜 0:00，用同一套星历（月
+ * 球 Meeus 黄经黄纬、行星 JPL Table 1 根数换地心黄经）算月亮与
+ * 五颗肉眼行星的黄道落点，再经地平坐标换算（东京 35.68°N）落到
+ * 图上。画法为地平坐标的正射投影（横轴 = −东向分量、纵轴 = 高
+ * 度正弦）：地平线恰为横轴、太阳在午夜位于正下方，与示意图的
+ * 拓扑一致且每点都是真值。验算（2026-11-15 0:00 东京，离线双路
+ * 交叉）：月亮黄经 291.0° 摩羯宫、高度 −41.9°、方位 267.5°（独立
+ * Schlyter 公式复算差 0.07°/0.11°）；土星黄经 8.2° 白羊宫、高
+ * 度 32.2°、方位 244.5°。
+ */
+function EclipticTonightCard() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 60000);
+    return () => clearInterval(id);
+  }, []);
+  const target = nextTokyoMidnight(now);
+  const targetMs = target.getTime();
+
+  const view = useMemo(() => {
+    const t = new Date(targetMs);
+    // 图面坐标：X = −cos(高度)·sin(方位)（东在左），Y = sin(高度)
+    const toXY = (altDeg: number, azDeg: number): { x: number; y: number } => {
+      const alt = (altDeg * Math.PI) / 180;
+      const az = (azDeg * Math.PI) / 180;
+      return { x: -Math.cos(alt) * Math.sin(az), y: Math.sin(alt) };
+    };
+    interface BodyPt {
+      id: string;
+      name: string;
+      color: string;
+      sign: string;
+      alt: number;
+      az: number;
+      x: number;
+      y: number;
+    }
+    const bodies: BodyPt[] = [];
+    const push = (
+      id: string,
+      name: string,
+      color: string,
+      ecl: EclipticCoord,
+    ) => {
+      const aa = eclipticAltAzTokyo(ecl.lonDeg, ecl.latDeg, t);
+      const xy = toXY(aa.altDeg, aa.azDeg);
+      bodies.push({
+        id,
+        name,
+        color,
+        sign: zodiacSignFor(ecl.lonDeg),
+        alt: aa.altDeg,
+        az: aa.azDeg,
+        x: xy.x,
+        y: xy.y,
+      });
+    };
+    push("sun", "太阳", "#ffc45e", sunGeocentricEcliptic(t));
+    push("moon", "月亮", "#e9edf5", moonEcliptic(t));
+    for (const p of TONIGHT_PLANETS) {
+      push(p.id, p.name, p.color, planetGeocentricEcliptic(p, t));
+    }
+    // 黄道弧采样（黄纬 0、每 1° 一点），按高度正负分实线/虚线段
+    interface ArcPt {
+      x: number;
+      y: number;
+      above: boolean;
+    }
+    const arc: ArcPt[] = [];
+    for (let lon = 0; lon <= 360; lon += 1) {
+      const aa = eclipticAltAzTokyo(lon % 360, 0, t);
+      const xy = toXY(aa.altDeg, aa.azDeg);
+      arc.push({ x: xy.x, y: xy.y, above: aa.altDeg >= 0 });
+    }
+    // 宫界刻度（每 30°）与宫名（宫心 15° 处）
+    const ticks: Array<{ x1: number; y1: number; x2: number; y2: number }> =
+      [];
+    const signLabels: Array<{
+      name: string;
+      x: number;
+      y: number;
+      above: boolean;
+    }> = [];
+    for (let k = 0; k < 12; k++) {
+      const b = eclipticAltAzTokyo(k * 30, 0, t);
+      const bp = toXY(b.altDeg, b.azDeg);
+      const bl = Math.hypot(bp.x, bp.y) || 1;
+      ticks.push({
+        x1: (bp.x / bl) * 0.965,
+        y1: (bp.y / bl) * 0.965,
+        x2: (bp.x / bl) * 1.035,
+        y2: (bp.y / bl) * 1.035,
+      });
+      const c = eclipticAltAzTokyo(k * 30 + 15, 0, t);
+      const cp = toXY(c.altDeg, c.azDeg);
+      const cl = Math.hypot(cp.x, cp.y) || 1;
+      signLabels.push({
+        name: ZODIAC_SIGNS[k]!,
+        x: (cp.x / cl) * 1.11,
+        y: (cp.y / cl) * 1.11,
+        above: c.altDeg >= 0,
+      });
+    }
+    return { bodies, arc, ticks, signLabels };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetMs]);
+
+  // 图面坐标 → SVG 像素（viewBox 360×300；横 ±1.34、纵 ±1.13 留白给宫名）
+  const W = 360;
+  const H = 300;
+  const px = (x: number): number => ((x + 1.34) / 2.68) * W;
+  const py = (y: number): number => ((1.13 - y) / 2.26) * H;
+  const horizonY = py(0);
+
+  // 黄道弧按实/虚分段成 path
+  const arcPaths: Array<{ d: string; above: boolean }> = [];
+  {
+    let cur: { pts: string[]; above: boolean } | null = null;
+    for (const p of view.arc) {
+      const s = `${px(p.x).toFixed(1)},${py(p.y).toFixed(1)}`;
+      if (!cur || cur.above !== p.above) {
+        if (cur && cur.pts.length > 1) {
+          arcPaths.push({ d: `M ${cur.pts.join(" L ")}`, above: cur.above });
+        }
+        // 段首补上一段的末点，交界不露缝
+        cur = { pts: cur ? [cur.pts[cur.pts.length - 1]!, s] : [s], above: p.above };
+      } else {
+        cur.pts.push(s);
+      }
+    }
+    if (cur && cur.pts.length > 1) {
+      arcPaths.push({ d: `M ${cur.pts.join(" L ")}`, above: cur.above });
+    }
+  }
+
+  // 天体标签落位：沿远离原点方向外推，近邻标签（火/木同宫相贴）
+  // 逐个下错一档防叠字
+  const labelPos = new Map<string, { lx: number; ly: number }>();
+  {
+    const placed: Array<{ lx: number; ly: number }> = [];
+    for (const b of view.bodies) {
+      if (b.id === "sun") continue;
+      const l = Math.hypot(b.x, b.y) || 1;
+      let lx = px(b.x + (b.x / l) * 0.1);
+      let ly = py(b.y + (b.y / l) * 0.1);
+      for (let tries = 0; tries < 3; tries++) {
+        const hit = placed.some(
+          (q) => Math.abs(q.lx - lx) < 36 && Math.abs(q.ly - ly) < 13,
+        );
+        if (!hit) break;
+        ly += 14;
+      }
+      lx = Math.min(Math.max(lx, 16), W - 16);
+      ly = Math.min(Math.max(ly, 10), H - 6);
+      labelPos.set(b.id, { lx, ly });
+      placed.push({ lx, ly });
+    }
+  }
+  const anchorFor = (x: number): "start" | "middle" | "end" =>
+    x < 118 ? "end" : x > 242 ? "start" : "middle";
+  const sun = view.bodies.find((b) => b.id === "sun");
+  const aboveNames = view.bodies
+    .filter((b) => b.id !== "sun" && b.alt >= 0)
+    .map((b) => `${b.name}在${b.sign}宫`)
+    .join("、");
+  const fmtDay = (d: Date): string =>
+    new Intl.DateTimeFormat("zh-CN", {
+      timeZone: "Asia/Tokyo",
+      month: "numeric",
+      day: "numeric",
+    }).format(d);
+
+  return (
+    <section className="glass p-4 sm:p-5" aria-label="今晚黄道">
+      <div className="mb-1 flex items-baseline justify-between gap-2">
+        <h2 className="font-display text-lg font-semibold tracking-wide text-[#eaf3ff]">
+          今晚黄道
+        </h2>
+        <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[11px] text-[var(--dim)]">
+          {fmtDay(target)} 0:00 · 东京
+        </span>
+      </div>
+      <p className="mb-2 text-xs text-[var(--dim)]">
+        午夜面向南方：黄道跨过南天，月亮与五颗行星按真实位置落在弧上
+      </p>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        className="w-full"
+        role="img"
+        aria-label={`今晚午夜东京的黄道示意图：${aboveNames ? `${aboveNames}，在地平线上` : "行星都在地平线下"}；太阳在地面以下`}
+      >
+        {/* 黄道弧：地平线上实线、以下虚线 */}
+        {arcPaths.map((p, i) => (
+          <path
+            key={i}
+            d={p.d}
+            fill="none"
+            stroke={p.above ? "#c98f3d" : "rgba(201,143,61,0.55)"}
+            strokeWidth={p.above ? 1.6 : 1.3}
+            strokeDasharray={p.above ? undefined : "4 4"}
+            strokeLinejoin="round"
+          />
+        ))}
+        {/* 宫界刻度 */}
+        {view.ticks.map((t, i) => (
+          <line
+            key={i}
+            x1={px(t.x1)}
+            y1={py(t.y1)}
+            x2={px(t.x2)}
+            y2={py(t.y2)}
+            stroke="rgba(147,169,201,0.6)"
+            strokeWidth={1}
+          />
+        ))}
+        {/* 地平线与方位字 */}
+        <line
+          x1={0}
+          y1={horizonY}
+          x2={W}
+          y2={horizonY}
+          stroke="rgba(125,144,173,0.55)"
+          strokeWidth={1}
+        />
+        <text x={20} y={horizonY + 16} fontSize={11} fill="#7d90ad">
+          东
+        </text>
+        <text
+          x={W / 2}
+          y={horizonY + 16}
+          fontSize={11}
+          fill="#7d90ad"
+          textAnchor="middle"
+        >
+          南
+        </text>
+        <text x={W - 20} y={horizonY + 16} fontSize={11} fill="#7d90ad" textAnchor="end">
+          西
+        </text>
+        <text
+          x={W / 2}
+          y={py(-0.52)}
+          fontSize={11}
+          fill="#7d90ad"
+          textAnchor="middle"
+          opacity={0.85}
+        >
+          地平线以下，看不到
+        </text>
+        {/* 宫名（沿弧宫心处；地平线下的一档压暗） */}
+        {view.signLabels.map((s) => (
+          <text
+            key={s.name}
+            x={px(s.x)}
+            y={py(s.y)}
+            fontSize={10}
+            fill="#93a9c9"
+            opacity={s.above ? 0.95 : 0.42}
+            textAnchor={anchorFor(px(s.x))}
+            dominantBaseline="middle"
+          >
+            {s.name}
+          </text>
+        ))}
+        {/* 天体落点与名字 */}
+        {view.bodies
+          .filter((b) => b.id !== "sun")
+          .map((b) => {
+            const lp = labelPos.get(b.id)!;
+            return (
+              <g key={b.id}>
+                <circle
+                  cx={px(b.x)}
+                  cy={py(b.y)}
+                  r={b.id === "moon" ? 4.6 : 3.6}
+                  fill={b.color}
+                  fillOpacity={b.alt >= 0 ? 1 : 0.45}
+                  stroke="rgba(3,8,18,0.6)"
+                  strokeWidth={0.6}
+                />
+                <text
+                  x={lp.lx}
+                  y={lp.ly}
+                  fontSize={11}
+                  fill="#eaf3ff"
+                  opacity={b.alt >= 0 ? 1 : 0.55}
+                  textAnchor={anchorFor(lp.lx)}
+                  dominantBaseline="middle"
+                  style={{ paintOrder: "stroke", stroke: "rgba(3,8,18,0.85)", strokeWidth: 3 }}
+                >
+                  {b.name}
+                </text>
+              </g>
+            );
+          })}
+        {/* 太阳：午夜在地面以下，落在虚线弧的下方 */}
+        {sun ? (
+          <g>
+            <circle
+              cx={px(sun.x)}
+              cy={py(sun.y)}
+              r={5.5}
+              fill="rgba(255,196,94,0.25)"
+              stroke="#ffc45e"
+              strokeWidth={1.2}
+            />
+            <text
+              x={Math.min(Math.max(px(sun.x), 52), W - 52)}
+              y={Math.min(py(sun.y) + 17, H - 4)}
+              fontSize={10.5}
+              fill="#c9a45e"
+              textAnchor="middle"
+            >
+              太阳（在地面以下）
+            </text>
+          </g>
+        ) : null}
+      </svg>
+      <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2.5 sm:grid-cols-3">
+        {view.bodies.map((b) => (
+          <div key={b.id} className="min-w-0">
+            <div className="flex items-baseline gap-1.5 text-sm">
+              <span
+                className="inline-block h-2 w-2 shrink-0 translate-y-[-1px] rounded-full"
+                style={{ background: b.color }}
+                aria-hidden
+              />
+              <span className="font-medium text-[#eaf3ff]">{b.name}</span>
+              <span className="text-xs text-[var(--dim)]">{b.sign}宫</span>
+            </div>
+            <p className="num mt-0.5 pl-3.5 text-xs text-[var(--dim)]">
+              {b.alt >= 0
+                ? `高度 ${b.alt.toFixed(0)}° · 方位 ${b.az.toFixed(0)}°`
+                : `地平线下 ${Math.abs(b.alt).toFixed(0)}°`}
+            </p>
+          </div>
+        ))}
+      </div>
+      <p className="mt-3 text-[11px] leading-relaxed text-[var(--dim)]">
+        来源：与月相卡同一套天文算法实时计算（月球黄经黄纬 Meeus
+        历表、行星地心黄经由 JPL 轨道根数换算、地平坐标按东京
+        35.68°N）· 时点为东京下一个午夜 0:00
+      </p>
+    </section>
+  );
+}
+
+/**
+ * 回到顶部悬浮按钮（2026-11-13，用户：页面太长了）：固定右下角
+ * 的玻璃小钮；点按平滑滚回最上方（reduced-motion 时直接跳）。
+ *
+ * 第四轮（2026-11-14，用户真机仍报没有）：本轮先用审计探针
+ * 实证——同一份第三轮代码在探针（Chromium 手机视口）里深滚后
+ * 按钮正常出现（截图右下角在位、点按路径完整），但用户 iPhone
+ * 的 Muse 宿主 WebView 里四轮皆无。结合前三轮证据（页内
+ * scrollTop 恒 0、无 scroll 事件、哨兵矩形不动、IO 不报），
+ * 唯一自洽的解释是：该宿主在页面自身的滚动盒之外滚动（宿主
+ * 层滚动），页内不存在任何可观察的滚动信号——再堆侦测通道
+ * 也触发不了。故本轮起显形不再依赖滚动侦测：
+ * - 页面内容高度超过约 1.4 屏即常驻显示（长页才有回顶需求；
+ *   短页/无滚动布局自动不显示）。判定只读 scrollHeight 与
+ *   innerHeight，与谁在滚无关，挂载时、resize 时与 400ms
+ *   轮询里持续复核（数据迟到把页面撑长时也能跟上）。
+ * - 原三路侦测（事件目标 scrollTop、哨兵矩形、IO）保留为冗
+ *   余：标准浏览器里它们若先报「已滚」，同样保持显示——显形
+ *   条件是两者取或，不互相否决。
+ * - 显形双写：除 setState（aria/焦点）外直接同步写按钮 DOM
+ *   的 opacity/visibility/pointerEvents；定位走内联 style。
+ * 回顶动作全通道并行：哨兵 scrollIntoView（连滚所有可滚动祖
+ * 先，宿主层滚动时原生侧也会把哨兵带入视野）＋从哨兵起逐层
+ * 祖先 scrollTo(0)（不预设滚动者，逐个试过去）＋ window /
+ * scrollingElement / 面板锚 scrollTo。按钮带 data-back-to-top
+ * 标记供探针按属性核查。
  */
 function BackToTop() {
   const [shown, setShown] = useState(false);
+  const btnRef = useRef<HTMLButtonElement | null>(null);
+  const sentinelRef = useRef<HTMLSpanElement | null>(null);
   useEffect(() => {
-    // 布局事实（2026-11-14 全页核对）：全页没有任何 overflow-y
-    // 滚动盒（仅两处浮层小盒），页面滚动者就是 document 本身——
-    // 根节点 overflow-x: clip 不建滚动容器，main 也不是滚动盒
-    // （data-scroll-panel 只是定位锚，见 main 处注释，两处口径
-    // 一致）。旧实现其实已读 document.scrollingElement＋window
-    // capture 监听，静态代码查无确凿失效点，真机永不出现的确切
-    // 失效环节未能从代码断定。本轮按纵深防御处理：显形判定同时
-    // 读文档滚动者、window.scrollY 与定位锚元素三路（任一过阈值
-    // 即显示，阈值降到 1.2 屏），监听挂 window capture＋锚元素双
-    // 通道，回顶对文档与 window 双写；层级 z-[70] 压过一切卡片。
-    // 是否修好以探针深滚复演为准（见本轮构建回报）。
-    const panel = () =>
-      document.querySelector<HTMLElement>("[data-scroll-panel]");
-    const docTop = () =>
-      document.scrollingElement?.scrollTop ?? window.scrollY ?? 0;
-    const update = () => {
-      const p = panel();
-      const top = Math.max(docTop(), p?.scrollTop ?? 0);
-      setShown(top > window.innerHeight * 1.2);
+    const btn = btnRef.current;
+    const sentinel = sentinelRef.current;
+    let scrollOn = false;
+    let ioOn = false;
+    let longPage = false;
+    let last = false;
+    const apply = () => {
+      const on = scrollOn || ioOn || longPage;
+      if (btn) {
+        btn.style.opacity = on ? "1" : "0";
+        btn.style.visibility = on ? "visible" : "hidden";
+        btn.style.pointerEvents = on ? "auto" : "none";
+      }
+      if (on !== last) {
+        last = on;
+        setShown(on);
+      }
     };
-    update();
-    const p = panel();
-    window.addEventListener("scroll", update, {
+    const threshold = () => window.innerHeight * 0.9;
+    const checkScroll = (extraTop?: number) => {
+      const tops = [
+        document.scrollingElement?.scrollTop ?? 0,
+        document.documentElement?.scrollTop ?? 0,
+        document.body?.scrollTop ?? 0,
+        window.scrollY ?? 0,
+        btn?.parentElement?.scrollTop ?? 0,
+        document.querySelector<HTMLElement>("[data-scroll-panel]")
+          ?.scrollTop ?? 0,
+        extraTop ?? 0,
+      ];
+      // 哨兵矩形：滚过多少，top 就变负多少（哨兵高 1px）
+      if (sentinel) tops.push(-sentinel.getBoundingClientRect().top);
+      scrollOn = Math.max(...tops) > threshold();
+      // 长页判定：内容高度对视口高度，与滚动者身份无关——宿主
+      // 在页外滚动时这是唯一仍如实可读的量。
+      const contentH = Math.max(
+        document.scrollingElement?.scrollHeight ?? 0,
+        document.documentElement?.scrollHeight ?? 0,
+        document.body?.scrollHeight ?? 0,
+      );
+      longPage = contentH > window.innerHeight * 1.4;
+      apply();
+    };
+    let raf = 0;
+    let pendingExtra: number | undefined;
+    const schedule = (extraTop?: number) => {
+      if (extraTop != null) pendingExtra = extraTop;
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        const ex = pendingExtra;
+        pendingExtra = undefined;
+        checkScroll(ex);
+      });
+    };
+    const onScrollEvent = (e: Event) => {
+      const t = e.target;
+      // 滚动事件的 target 即真滚动者（文档滚动时 target 是
+      // document、scrollTop 为 0，此时矩形通道兜底）
+      schedule(t instanceof Element ? t.scrollTop : undefined);
+    };
+    checkScroll();
+    window.addEventListener("scroll", onScrollEvent, {
       passive: true,
       capture: true,
     });
-    p?.addEventListener("scroll", update, { passive: true });
-    window.addEventListener("resize", update);
+    document.addEventListener("scroll", onScrollEvent, {
+      passive: true,
+      capture: true,
+    });
+    const onNudge = () => schedule();
+    window.addEventListener("touchmove", onNudge, { passive: true });
+    window.addEventListener("resize", onNudge);
+    const timer = window.setInterval(() => checkScroll(), 400);
+    let io: IntersectionObserver | null = null;
+    if (sentinel && "IntersectionObserver" in window) {
+      io = new IntersectionObserver(
+        (entries) => {
+          for (const en of entries) ioOn = !en.isIntersecting;
+          apply();
+        },
+        { threshold: 0 },
+      );
+      io.observe(sentinel);
+    }
     return () => {
-      window.removeEventListener("scroll", update, { capture: true });
-      p?.removeEventListener("scroll", update);
-      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", onScrollEvent, {
+        capture: true,
+      });
+      document.removeEventListener("scroll", onScrollEvent, {
+        capture: true,
+      });
+      window.removeEventListener("touchmove", onNudge);
+      window.removeEventListener("resize", onNudge);
+      window.clearInterval(timer);
+      if (raf) cancelAnimationFrame(raf);
+      io?.disconnect();
     };
   }, []);
   return (
-    <button
-      type="button"
-      aria-label="回到顶部"
-      aria-hidden={!shown}
-      tabIndex={shown ? 0 : -1}
-      onClick={() => {
-        const reduce = window.matchMedia(
-          "(prefers-reduced-motion: reduce)",
-        ).matches;
-        const behavior: ScrollBehavior = reduce ? "auto" : "smooth";
-        // 回顶同样双通道：文档滚动者与面板盒都送回顶部，哪条是
-        // 真滚动者就由哪条生效，另一条在顶部时是无操作。
-        const el = document.scrollingElement ?? document.documentElement;
-        el.scrollTo({ top: 0, behavior });
-        window.scrollTo({ top: 0, behavior });
-        document
-          .querySelector<HTMLElement>("[data-scroll-panel]")
-          ?.scrollTo({ top: 0, behavior });
-      }}
-      className={`glass fixed right-4 bottom-[max(1rem,env(safe-area-inset-bottom))] z-[70] px-3.5 py-2 text-[13px] text-[var(--text)] transition-[opacity,visibility] duration-300 ${
-        shown ? "visible opacity-100" : "invisible pointer-events-none opacity-0"
-      }`}
-    >
-      ↑ 回到顶部
-    </button>
+    <>
+      <span
+        ref={sentinelRef}
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          width: "1px",
+          height: "1px",
+          pointerEvents: "none",
+        }}
+      />
+      <button
+        ref={btnRef}
+        type="button"
+        data-back-to-top=""
+        aria-label="回到顶部"
+        aria-hidden={!shown}
+        tabIndex={shown ? 0 : -1}
+        onClick={() => {
+          const reduce = window.matchMedia(
+            "(prefers-reduced-motion: reduce)",
+          ).matches;
+          const behavior: ScrollBehavior = reduce ? "auto" : "smooth";
+          // 回顶全通道并行：哨兵 scrollIntoView 连滚所有可滚动
+          // 祖先（宿主层滚动时也能把外层带回顶部）；从哨兵起
+          // 逐层祖先逐个 scrollTo(0)，不预设谁是滚动者；其余
+          // 通道覆盖文档/窗口/面板盒，无命中的是无操作。
+          sentinelRef.current?.scrollIntoView({
+            behavior,
+            block: "start",
+          });
+          let node: HTMLElement | null = sentinelRef.current;
+          while (node) {
+            node.scrollTo?.({ top: 0, behavior });
+            node = node.parentElement;
+          }
+          const el =
+            document.scrollingElement ?? document.documentElement;
+          el.scrollTo({ top: 0, behavior });
+          window.scrollTo({ top: 0, behavior });
+          btnRef.current?.parentElement?.scrollTo({
+            top: 0,
+            behavior,
+          });
+          document
+            .querySelector<HTMLElement>("[data-scroll-panel]")
+            ?.scrollTo({ top: 0, behavior });
+        }}
+        style={{
+          position: "fixed",
+          right: "1rem",
+          bottom: "max(1rem, env(safe-area-inset-bottom))",
+          zIndex: 70,
+          opacity: 0,
+          visibility: "hidden",
+          pointerEvents: "none",
+          transition: "opacity 0.3s ease, visibility 0.3s ease",
+        }}
+        className="glass px-3.5 py-2 text-[13px] text-[var(--text)]"
+      >
+        ↑ 回到顶部
+      </button>
+    </>
   );
 }
 
@@ -1088,6 +1701,9 @@ export function App() {
   const [solarSystem, setSolarSystem] = useState(false);
   /** 太阳系取景（移动端）：near 近览内圈（默认）/ full 全览 */
   const [solarView, setSolarView] = useState<"near" | "full">("near");
+  /** 银河系模式（太阳系再往外一级）与取景：full 全盘 / near 太阳邻域 */
+  const [galaxy, setGalaxy] = useState(false);
+  const [galaxyView, setGalaxyView] = useState<"full" | "near">("full");
   /** 太阳系聚焦观赏的天体 id（点星球飞近）；null = 太阳系总览 */
   const [focusedBody, setFocusedBody] = useState<string | null>(null);
   /** 主页星球：本次浏览内把某天体设为主页大球；只存组件状态，
@@ -1138,6 +1754,53 @@ export function App() {
     const id = setTimeout(() => setShellSolar(false), 2050);
     return () => clearTimeout(id);
   }, [solarSystem]);
+  /** 舞台展开态（板块下移修复·二轮）：与 Globe 转场同拍的外壳
+   * 口径（shellSolar 覆盖太阳系全程含退出转场 2 秒滞后）或银
+   * 河态。展开层是自包含视口浮层（见 return 里舞台层）：
+   * position:fixed 覆盖视口、不进文档流——页面本体从头到尾
+   * 不被钉、不被滚、不被动，进入/退出后下方卡片的渲染位置
+   * 与之前像素级一致。一轮的教训钉死在这里：旧实现用
+   * fixed-body 钉身（body position:fixed + top:−scrollY）＋
+   * 退出 scrollTo 恢复滚动——布局坐标三态恒等，但钉身会把
+   * 整页视觉平移一份，在宿主 WebView 里（页面由宿主在页面
+   * 滚动盒之外滚动、window.scrollY 不是权威值）钉/解钉必
+   * 然让渲染位置错位，而布局坐标验收对此结构性失明（用户
+   * 真机连报多次「卡片位置不对」）。本轮架构上不再存在任
+   * 何钉身/恢复逻辑；滚动遏制只在浮层内部解决（浮层 CSS
+   * touch-action:none + overscroll-behavior:contain + 下方
+   * stageTouchGuard），不碰 body、不碰 document。桌面端
+   * 布局（lg:h-screen 网格列）不展开，口径不变。 */
+  const stageExpanded = shellSolar || galaxy;
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!stageExpanded) return;
+    if (!window.matchMedia("(max-width: 1023.5px)").matches) return;
+    const el = stageRef.current;
+    if (!el) return;
+    // 浮层内的手势遏制：落在浮层子树里、且不属于任何内层可
+    // 滚盒（如菜单列表）的 touchmove 一律 preventDefault——
+    // 手势既滚不动页面、也链式溢出不到页面；内层可滚盒的自
+    // 身滚动放行（与 touch-action「首个滚动祖先」语义一致）。
+    // 监听只挂浮层自身，卸载即摘除
+    const guard = (e: TouchEvent) => {
+      let n = e.target as Element | null;
+      while (n && n !== el) {
+        const s = window.getComputedStyle(n);
+        if (
+          (s.overflowY === "auto" || s.overflowY === "scroll") &&
+          n.scrollHeight > n.clientHeight
+        ) {
+          return;
+        }
+        n = n.parentElement;
+      }
+      e.preventDefault();
+    };
+    el.addEventListener("touchmove", guard, { passive: false });
+    return () => {
+      el.removeEventListener("touchmove", guard);
+    };
+  }, [stageExpanded]);
   // 进太阳系时收起星球菜单（底栏随之换成太阳系外壳，菜单不许在
   // 回到主页时自己重新弹开）
   useEffect(() => {
@@ -1287,6 +1950,7 @@ export function App() {
             | "mixed"
             | null;
           calibrationAnchor?: string | null;
+          jpCalibrationAnchor?: string | null;
           topDecomp?: CountryCapDecomp | null;
         }
       | null
@@ -1297,9 +1961,14 @@ export function App() {
   /** 每行那句「从什么时候开始算」的说明，全用日期和人话：
    *  12m = 近 12 个月（基点日期与实际天数照实标注）/
    *  full = 从最早一条记录开始算 / 30d = 最近 30 天 /
-   *  sinceStart = 从开始记录以来 / calibrated = 中国行只从
-   *  2025 年 7 月底、名单稳定下来之后开始算 / mixed = 合计行，
-   *  其他行从最早记录开始算、中国行从 2025 年 7 月底开始算 */
+   *  sinceStart = 从开始记录以来 / calibrated = 校准行只从锚点
+   *  日期、名单稳定下来之后开始算（中国行 2025-07-31、日本行
+   *  2026-08-30）/ mixed = 合计行，日本行从其锚点开始算、
+   *  其余行近 12 个月 */
+  const anchorMonthShort = (dateStr?: string | null): string =>
+    dateStr && /^\d{4}-\d{2}/.test(dateStr)
+      ? `${dateStr.slice(0, 4)}年${Number(dateStr.slice(5, 7))}月底`
+      : "2026年8月底";
   const capWindowLabel = (
     basis:
       | "12m"
@@ -1325,7 +1994,7 @@ export function App() {
         : basis === "calibrated"
           ? `从 ${baseDate ?? "2025-07-31"} 开始算（公司名单稳定下来之后）`
           : basis === "mixed"
-            ? `合计：其他行从 ${baseDate ?? "2024-12-31"} 开始算，中国从 ${countryCapData?.calibrationAnchor ?? "2025-07-31"} 开始算`
+            ? `合计：日本行从 ${countryCapData?.jpCalibrationAnchor ?? "2026-08-30"} 开始算（公司名单稳定下来之后），其余行近 12 个月`
             : basis === "30d"
               ? "最近 30 天"
               : `从开始记录以来（${days ?? 0} 天）`;
@@ -1349,20 +2018,26 @@ export function App() {
           ? `${baseDate} 起`
           : "最早记录起"
         : basis === "calibrated"
-          ? "2025年7月底起"
+          ? `${anchorMonthShort(baseDate)}起`
           : basis === "mixed"
             ? "各行分开算"
             : basis === "30d"
               ? "近30日"
               : `记录${days ?? 0}日`;
-  /** 统计公司变多提醒：数字照常显示，只在后面加一枚琥珀小签，
-   *  提醒这段时间统计的公司变多了，涨幅里混着这一块 */
+  /** 统计公司变多提醒：数字照常显示，只在后面加一枚琥珀小签。
+   *  文案 2026-11-14 按用户定稿简化：原句「这段时间统计的公司
+   *  变多了，涨幅里混着这一块」只删「这段时间」四字、意思不变
+   *  （上一稿曾整句换成「含公司变多的部分」，改得太多，本轮按
+   *  定稿改回整句的简化版）。合计行（topDecomp）与逐行账目段
+   *  共用此组件，注记口径只有这一处、不会有的改有的没改；具体
+   *  家数变化仍在签后括号注与 title 里，不丢信息。签身 nowrap：
+   *  宁可整签换行，也不许签内断字。 */
   const coverageBadge = (notes?: string[]) => (
     <span
-      className="ml-1.5 inline-block rounded border border-[rgba(255,196,94,0.5)] bg-[rgba(255,196,94,0.12)] px-1 py-px align-middle text-[10px] font-medium text-[#ffd98f]"
+      className="ml-1.5 inline-block rounded border border-[rgba(255,196,94,0.5)] bg-[rgba(255,196,94,0.12)] px-1 py-px align-middle text-[10px] font-medium whitespace-nowrap text-[#ffd98f]"
       title={notes?.join("；")}
     >
-      这段时间统计的公司变多了，涨幅里混着这一块
+      统计的公司变多了，涨幅里混着这一块
     </span>
   );
   const countryCapRows = countryCapData?.rows ?? [];
@@ -1829,6 +2504,41 @@ export function App() {
           }}
           aria-label="3D 地球监控区"
         >
+          {/* 舞台层（板块下移修复·二轮，用户真机连报「太阳系/
+              银河模式下主页卡片位置不对」）：section 在文档流
+              里三态恒为最初的英雄区高 54svh，下方板块位置三
+              态恒等；太阳系/银河模式激活时本层切换为自包含视
+              口浮层——position:fixed 覆盖整个视口（锚点是视
+              口、不是文档/section：页面滚到任何位置进入模式，
+              画布都整屏落位）、不透明底（渐变 + #040814 实
+              底）、滚动遏制全在浮层内闭环（touch-action:
+              none + overscroll-behavior:contain + stageRef
+              上的 touchmove guard），页面本体不被钉身、不被
+              滚动、不被恢复——退出模式后卡片渲染位置与进入
+              前像素级一致（一轮的 absolute 溢出 + fixed-body
+              钉身 + scrollTo 恢复已整段退役，见 stageExpanded
+              处注）。展开/收起的尺寸变化由 Globe 的 Resize-
+              Observer 与逐帧容器高读取自动重拟合；银河取景
+              定标是世界单位公式（亮盘 0.80 口径与画布像素高
+              无关），浮层改整屏高不改任何取景数值。桌面端
+              （lg）本层恒 absolute inset-0 填满 h-screen
+              列，不展开。 */}
+          <div
+            ref={stageRef}
+            className={
+              stageExpanded
+                ? "fixed inset-0 z-40 [touch-action:none] [overscroll-behavior:contain] lg:absolute lg:[touch-action:auto] lg:[overscroll-behavior:auto]"
+                : "absolute inset-0"
+            }
+            style={
+              stageExpanded
+                ? {
+                    background:
+                      "linear-gradient(180deg, rgba(4,8,20,0.25) 0%, rgba(4,8,20,0) 78%, rgba(4,8,20,0.9) 100%), #040814",
+                  }
+                : undefined
+            }
+          >
           <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-between gap-2 px-3 pt-[max(0.75rem,env(safe-area-inset-top))] lg:px-5">
             <TokyoClock />
             {/* 右上角只此一处：数据状态与刷新反馈合并（见 DataStatus） */}
@@ -1862,6 +2572,9 @@ export function App() {
                 selected={selected}
                 autoRotate={autoRotate}
                 solarSystem={solarSystem}
+                galaxy={galaxy}
+                galaxyView={galaxyView}
+                onGalaxyViewChange={setGalaxyView}
                 solarView={solarView}
                 focusedBody={focusedBody}
                 homePlanet={homePlanet}
@@ -1888,6 +2601,8 @@ export function App() {
                     setSelectedCenter(null);
                   } else {
                     setFocusedBody(null);
+                    setGalaxy(false);
+                    setGalaxyView("full");
                   }
                   setSolarSystem(v);
                 }}
@@ -2088,7 +2803,47 @@ export function App() {
           )}
 
           <div className="absolute inset-x-0 bottom-3 z-20 flex flex-wrap items-center justify-center gap-2 px-3">
-            {shellSolar ? (
+            {galaxy ? (
+              <>
+              <button
+                type="button"
+                aria-label="返回太阳系"
+                onClick={() => {
+                  setGalaxy(false);
+                  setGalaxyView("full");
+                }}
+                className="rounded-full border border-transparent bg-[#ffc45e] px-4 py-1.5 text-sm font-semibold text-[#04101f] backdrop-blur"
+              >
+                返回太阳系
+              </button>
+              <button
+                type="button"
+                aria-label="全览银河系"
+                aria-pressed={galaxyView === "full"}
+                onClick={() => setGalaxyView("full")}
+                className={`rounded-full border px-3.5 py-1.5 text-sm backdrop-blur ${
+                  galaxyView === "full"
+                    ? "border-transparent bg-[#ffc45e] font-semibold text-[#04101f]"
+                    : "border-[var(--border)] bg-[rgba(8,25,48,0.65)] text-[var(--text)]"
+                }`}
+              >
+                全览
+              </button>
+              <button
+                type="button"
+                aria-label="放大到太阳邻域"
+                aria-pressed={galaxyView === "near"}
+                onClick={() => setGalaxyView("near")}
+                className={`rounded-full border px-3.5 py-1.5 text-sm backdrop-blur ${
+                  galaxyView === "near"
+                    ? "border-transparent bg-[#ffc45e] font-semibold text-[#04101f]"
+                    : "border-[var(--border)] bg-[rgba(8,25,48,0.65)] text-[var(--text)]"
+                }`}
+              >
+                太阳邻域
+              </button>
+              </>
+            ) : shellSolar ? (
               focusedBody ? (
               <>
               <button
@@ -2132,6 +2887,14 @@ export function App() {
                 }`}
               >
                 全览
+              </button>
+              <button
+                type="button"
+                aria-label="进入银河系视图"
+                onClick={() => setGalaxy(true)}
+                className="rounded-full border border-[rgba(255,196,94,0.5)] bg-[rgba(8,25,48,0.65)] px-3.5 py-1.5 text-sm whitespace-nowrap text-[#ffd98f] backdrop-blur"
+              >
+                银河系
               </button>
               </>
               )
@@ -2209,6 +2972,7 @@ export function App() {
               </>
             )}
           </div>
+          </div>
         </section>
 
         {/* 数据面板列：data-scroll-panel 供 BackToTop 定位页面内的
@@ -2262,6 +3026,9 @@ export function App() {
           {/* 月相：天文算法实时计算，与太阳系 3D 月球同源 */}
           <MoonPhaseCard />
 
+          {/* 今晚黄道：紧跟月相卡，同一套星历算下一个东京午夜的黄道实况 */}
+          <EclipticTonightCard />
+
           {/* Cap 7：国家市值排名（按公司是哪国的来算；美国+加拿大、中国+台湾各合并一行） */}
           <BlockShell
             title="Cap 7 市值"
@@ -2273,8 +3040,15 @@ export function App() {
             <p className="-mt-1 mb-3 text-xs text-[var(--dim)]">
               国家市值排名 · 按公司是哪国的来算
             </p>
-            <div className="mb-3 flex items-baseline justify-between gap-3">
-              <div>
+            {/* 块首合计行（2026-11-14 移动端排版）：手机上纵排——
+                左列（合计市值 + 那句账，账里还挂着统计公司变多
+                的签）整行全宽先排，合计涨跌/份额两枚读数随后并
+                排一行；横排时右侧两读数的长标签（如「合计涨跌
+                （日本从2026年8月底起算）」≈200px）会把左列挤到
+                比签还窄、签溢出。sm 起恢复左右横排。390–420
+                之间无断点（sm=640），两宽同此纵排。 */}
+            <div className="mb-3 flex flex-col gap-2.5 sm:flex-row sm:items-baseline sm:justify-between sm:gap-3">
+              <div className="min-w-0">
                 <span className="text-xs text-[var(--dim)]">
                   前七合计市值（合并行计七行）
                 </span>
@@ -2316,12 +3090,12 @@ export function App() {
                   </div>
                 )}
               </div>
-              <div className="shrink-0 text-right">
+              <div className="flex shrink-0 flex-wrap gap-x-6 gap-y-2 text-left sm:block sm:text-right">
                 {countryCapData?.topChangePct != null && (
-                  <>
-                    <div className="text-xs text-[var(--dim)]">
+                  <div>
+                    <div className="text-xs whitespace-nowrap text-[var(--dim)]">
                       {countryCapData.topChangeBasis === "mixed"
-                        ? "合计涨跌（中国从2025年7月底起算）"
+                        ? `合计涨跌（日本从${anchorMonthShort(countryCapData.jpCalibrationAnchor)}起算）`
                         : countryCapData.topChangeBasis === "12m"
                           ? "合计涨跌（近 12 个月）"
                           : `涨跌（${capWindowShort(countryCapData.topChangeBasis, countryCapData.topWindowDays, countryCapData.topDecomp?.baseDate ?? countryCapData.backfillFrom ?? undefined)} 起算）`}
@@ -2331,12 +3105,12 @@ export function App() {
                     >
                       {fmtPct(countryCapData.topChangePct)}
                     </div>
-                  </>
+                  </div>
                 )}
                 {countryCapData?.globalTotal != null &&
                   countryCapData?.topTotal != null && (
-                    <div className="mt-1">
-                      <div className="text-xs text-[var(--dim)]">
+                    <div className="sm:mt-1">
+                      <div className="text-xs whitespace-nowrap text-[var(--dim)]">
                         占这次统计的各国总和
                       </div>
                       <div className="num text-base font-semibold text-[#eaf3ff]">
@@ -2386,8 +3160,8 @@ export function App() {
                       height={22}
                       splitIndex={(() => {
                         // 虚线分界取两者靠后者：2023 早期点（收录
-                        // 太薄、只作参考）与中国行校准锚点之前的
-                        // 段落，都不算进涨跌、都以虚线淡色区隔。
+                        // 太薄、只作参考）与校准行（中国/日本）锚点
+                        // 之前的段落，都不算进涨跌、都以虚线淡色区隔。
                         const earlySplit = r.sparkEarly
                           ? r.sparkEarly.findIndex((e) => !e)
                           : -1;
@@ -2412,7 +3186,16 @@ export function App() {
                           className={`num text-[11px] ${pctColor(r.changePct)}`}
                         >
                           {fmtPct(r.changePct)}
-                          <span className="ml-1 text-[10px] text-[var(--dim)]">
+                          {/* 窗口短标单独一行（2026-11-14 移动端
+                              排版）：标签长短不一，与涨幅同行时
+                              「近12个月」一行约 89px 勉强塞进
+                              92px 右列、「2026年8月底起」一行约
+                              116px 直接撑爆、折行错位且各行右列
+                              高度参差；改为涨幅一行、标签一行，
+                              七行右列统一三行（市值/涨幅/窗口
+                              标）对齐成列，标签多长都不挤数字、
+                              不出界。 */}
+                          <span className="block text-[10px] whitespace-nowrap text-[var(--dim)]">
                             {capWindowShort(
                               r.changeBasis,
                               r.windowDays,
@@ -2444,6 +3227,20 @@ export function App() {
                       </p>
                       <p className="mt-1 text-[11px] leading-relaxed text-[#f3c1c1]">
                         {"2025 年 7 月，做这张表的数据网站把统计的中国公司从 329 家加到 474 家——多出来的近 2 万亿美元涨幅，大半是名单变长，不是股票涨的，跟上交所、深交所、港交所无关。所以这一行只从 2025 年 7 月底、名单稳定后开始算。"}
+                      </p>
+                    </div>
+                  ) : null}
+                  {r.code === "JP" ? (
+                    <div
+                      role="note"
+                      aria-label="先说清：日本这一行，也有一段涨幅是假的"
+                      className="ml-7 mt-2 rounded-lg border border-[rgba(255,107,107,0.6)] bg-[rgba(255,107,107,0.10)] px-3 py-2.5"
+                    >
+                      <p className="text-[13px] font-bold leading-snug text-[#ffb1b1]">
+                        ⚠ 先说清：日本这一行，也有一段涨幅是假的
+                      </p>
+                      <p className="mt-1 text-[11px] leading-relaxed text-[#f3c1c1]">
+                        {"2026 年 6 月到 9 月，做这张表的数据网站把统计的日本公司从 710 家一路加到 944 家——这段时间多出来的涨幅里，一大块是名单变长，不是股票涨的，跟东京证券交易所无关。所以这一行只从 2026 年 8 月底、名单稳定后开始算。"}
                       </p>
                     </div>
                   ) : null}
@@ -2493,11 +3290,15 @@ export function App() {
                       {r.components.map((c) => (
                         <div key={c.code}>
                           <div className="flex items-baseline justify-between gap-2 text-[11px] text-[var(--dim)]">
-                            <span>
+                            <span className="min-w-0">
                               {c.name}
                               <span className="ml-1 opacity-70">{c.code}</span>
                             </span>
-                            <span className="num">
+                            {/* 子行数字整段 nowrap：市值·家数不许
+                                被挤到折行或截断（420 宽下整行
+                                约 180px，卡内可用约 336px，
+                                单行有余量） */}
+                            <span className="num shrink-0 whitespace-nowrap">
                               {fmtT(c.marketCap)} ·{" "}
                               {c.companies.toLocaleString("en-US")} 家
                             </span>
@@ -2509,18 +3310,21 @@ export function App() {
                 </li>
               ))}
             </ul>
-            <p className="mt-2.5 text-[11px] leading-relaxed text-[var(--dim)]">
+            {/* 块尾四段：段距统一 mt-2（原先首段 2.5、余段 1.5
+                不齐，2026-11-14 排版体检时统一） */}
+            <p className="mt-2 text-[11px] leading-relaxed text-[var(--dim)]">
               按公司是哪国的加总（在国外上市的算本国）；美国和加拿大、中国和台湾各并一行，并完取前七。行首涨幅都是近
-              12 个月的；中国行的窗口在 2025 年 7 月底之后，见行内说明。
+              12 个月的；中国行的窗口在 2025 年 7 月底之后，日本行从 2026 年
+              8 月底起算，见行内说明。
             </p>
-            <p className="mt-1.5 text-[11px] leading-relaxed text-[var(--dim)]">
+            <p className="mt-2 text-[11px] leading-relaxed text-[var(--dim)]">
               走势每年一个点：2023
               年的点来自 Wayback 存档，那时收录的公司少得多、只作参考；近年的点是把每月记下的数在年底取一个。
             </p>
-            <p className="mt-1.5 text-[11px] leading-relaxed text-[var(--dim)]">
+            <p className="mt-2 text-[11px] leading-relaxed text-[var(--dim)]">
               每行下面那句账，是先按大盘涨跌和汇率算一遍市值该变多少，实际多出的差额混着新上市、增发回购和大盘之外的涨跌，不能当资金流入流出看。七行合计就是每行变化的加总。
             </p>
-            <p className="mt-1.5 text-[11px] leading-relaxed text-[var(--dim)]">
+            <p className="mt-2 text-[11px] leading-relaxed text-[var(--dim)]">
               来源：CompaniesMarketCap 各国上市公司市值榜；指数来自 Yahoo
               Finance，汇率来自 Frankfurter / FRED · 截至{" "}
               {data?.countryCaps?.asOf ?? "—"}

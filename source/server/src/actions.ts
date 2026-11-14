@@ -1174,13 +1174,18 @@ interface CountryCapParsed {
 //       archive (2022's nearest capture is 51 days out — not used).
 //       The last 2023 capture, 2023-12-19, was imported once by
 //       importCap7Early2023 from a SHA-256-verified staged file with
-//       source="wayback-backfill-early", its true date kept. Its
+//       source="wayback-backfill-early", its true date kept (that
+//       action retired in the 2026-11-14 edit; its point stays). Its
 //       coverage is far thinner (JP 349 companies vs 944 now), so it
 //       is a LEVEL reference for the trend line only: drawn dashed /
 //       dim, never a growth base (the trailing-12-month window never
 //       reaches it), and no cap:TOTAL point was written for it — its
 //       denominator is the page headline total, a different basis
-//       from the backfill's per-row sums.
+//       from the backfill's per-row sums. Exception (2026-11-14,
+//       user: same calibration as China): the JP row's window is
+//       its calibration window (anchor 2026-08-30 → latest),
+//       because its 12-month window straddles CMC's 2026 Japan
+//       coverage expansion — see JP_CALIBRATION_ANCHOR below.
 //   (b) Live daily points appended by each successful refresh
 //       (source="live"), the same accumulation discipline as the Mag7
 //       merged total (mag7_total_v2).
@@ -1278,10 +1283,11 @@ interface CapWindow {
    *  "full" = longest available window (first → last point of the
    *  merged backfill + live series, span ≥ 30 days), "30d" and
    *  "sinceStart" remain only as fallbacks for a series too young
-   *  to hold a 12-month base; "calibrated" = CN+TW fallback: window
-   *  starts at the post-expansion anchor 2025-07-31 (see
-   *  CN_CALIBRATION_ANCHOR below); "mixed" = top-7 aggregate whose
-   *  rows use differing window bases. */
+   *  to hold a 12-month base; "calibrated" = window starts at the
+   *  row's post-expansion calibration anchor (CN+TW 2025-07-31 as a
+   *  guard behind its 12-month window; JP 2026-08-30 as the row's
+   *  primary window — see the anchor constants below); "mixed" =
+   *  top-7 aggregate whose rows use differing window bases. */
   basis: "12m" | "full" | "30d" | "sinceStart" | "calibrated" | "mixed";
   changePct: number;
 }
@@ -1306,14 +1312,44 @@ interface CapWindow {
 const CN_CALIBRATION_ANCHOR = "2025-07-31";
 const CN_CALIBRATED_ROW_CODE = "CN+TW";
 
-/** Calibrated window for the CN+TW row: base = first point on or
- *  after the anchor (the 2025-07-31 archive point itself when the
+/** Japan calibration anchor (user decision 2026-11-14: 「给日本行也
+ *  做同样的校准」 — same single-row calibration as China). CMC's
+ *  Japan coverage expanded in steps (monthly company counts from the
+ *  stored backfill): 2025-01 548→638 (+16.4%), then the main wave
+ *  2026-06 710→803 (+13.1%), 2026-07 803→884 (+10.1%), 2026-08
+ *  884→929 (+5.1%); after the last big step the count moved only
+ *  +1.6% (929→944 at 2026-09-30) and then held flat at 944. The
+ *  trailing-12-month window (base 2025-10-31, 672 家) therefore
+ *  straddles the whole 2026 wave: of the row's +22.17% / +$1.388T
+ *  over that window, the residual was +$0.648T — roughly half the
+ *  gain is the list getting longer, not prices rising. Same rule as
+ *  China: anchor = first monthly point after the last big step,
+ *  2026-08-30 (JP $7.981T · 929 家); the JP row's changePct and
+ *  decomposition start at the anchor, the pre-anchor yearly segment
+ *  is drawn dashed / dim and excluded from growth, and the generic
+ *  >5% coverage note is re-judged inside the calibrated window
+ *  (929→944 = +1.6%, so it no longer fires for this row). */
+const JP_CALIBRATION_ANCHOR = "2026-08-30";
+const JP_CALIBRATED_ROW_CODE = "JP";
+
+/** Per-row calibration anchors, keyed by row code. Rows absent here
+ *  carry no calibration (calibrationAnchor null). */
+const CALIBRATION_ANCHORS: Record<string, string> = {
+  [CN_CALIBRATED_ROW_CODE]: CN_CALIBRATION_ANCHOR,
+  [JP_CALIBRATED_ROW_CODE]: JP_CALIBRATION_ANCHOR,
+};
+
+/** Calibrated window for a calibrated row: base = first point on or
+ *  after the row's anchor (the anchor archive point itself when the
  *  backfill is present), last = latest point. Falls back to null
  *  when no post-anchor base exists. */
-function capWindowCalibrated(series: CapPoint[]): CapWindow | null {
+function capWindowCalibrated(
+  series: CapPoint[],
+  anchor: string,
+): CapWindow | null {
   if (series.length < 2) return null;
   const last = series[series.length - 1]!;
-  const base = series.find((p) => p.date >= CN_CALIBRATION_ANCHOR) ?? null;
+  const base = series.find((p) => p.date >= anchor) ?? null;
   if (!base || base.date === last.date || base.value === 0) return null;
   const spanDays = capDayDiff(base.date, last.date);
   if (spanDays <= 0) return null;
@@ -1365,17 +1401,35 @@ function capWindow12m(series: CapPoint[]): CapWindow | null {
 }
 
 /** Effective window for a Cap 7 row: trailing 12 months for every
- *  row (2026-11-14 unification). For CN+TW the 12-month base lands
- *  after the 2025-07-31 calibration anchor on its own (base ≈
- *  2025-11 today, and the base only moves forward from here); the
- *  calibrated window remains as a guard should a 12-month base ever
- *  fall before the anchor, and the legacy longest-window rules are
- *  the last resort for a series too young for either. */
+ *  row (2026-11-14 unification), with two calibrated exceptions.
+ *  For CN+TW the 12-month base lands after the 2025-07-31
+ *  calibration anchor on its own (base ≈ 2025-11 today, and the
+ *  base only moves forward from here); the calibrated window
+ *  remains as a guard should a 12-month base ever fall before the
+ *  anchor. For JP the calibrated window (anchor 2026-08-30 →
+ *  latest) is the primary window, because its 12-month window
+ *  straddles the 2026 coverage wave. The legacy longest-window
+ *  rules are the last resort for a series too young for either. */
 function capWindowForRow(rowCode: string, series: CapPoint[]): CapWindow | null {
   const w12 = capWindow12m(series);
   if (rowCode === CN_CALIBRATED_ROW_CODE) {
     if (w12 && w12.base.date >= CN_CALIBRATION_ANCHOR) return w12;
-    return capWindowCalibrated(series) ?? w12 ?? capWindowFor(series);
+    return (
+      capWindowCalibrated(series, CN_CALIBRATION_ANCHOR) ??
+      w12 ??
+      capWindowFor(series)
+    );
+  }
+  if (rowCode === JP_CALIBRATED_ROW_CODE) {
+    // Japan (2026-11-14): unlike CN+TW, whose 12-month base already
+    // sits after its anchor, the JP 12-month window straddles the
+    // 2026 coverage wave, so the calibrated window IS the row's
+    // window — anchor → latest, however short that currently is.
+    return (
+      capWindowCalibrated(series, JP_CALIBRATION_ANCHOR) ??
+      w12 ??
+      capWindowFor(series)
+    );
   }
   return w12 ?? capWindowFor(series);
 }
@@ -1933,8 +1987,9 @@ async function refreshCountryCapsSection(db: Db): Promise<void> {
       // points stay in the table untouched — the trailing-12-month
       // window above picks its base from them. sparkEarly flags the
       // thin-coverage 2023 point so the client draws its segment
-      // dashed / dim; calibrationAnchor still marks the CN+TW
-      // pre-anchor segment the same way (the two coincide there).
+      // dashed / dim; calibrationAnchor still marks a calibrated
+      // row's pre-anchor segment the same way (for CN+TW the two
+      // coincide there; for JP the anchor split sits later).
       const sparkSeries = sampleYearlyPoints(series);
       return {
         ...r,
@@ -1946,8 +2001,7 @@ async function refreshCountryCapsSection(db: Db): Promise<void> {
         changePct: win?.changePct ?? null,
         windowDays: win?.windowDays ?? 0,
         changeBasis: win?.basis ?? null,
-        calibrationAnchor:
-          r.code === CN_CALIBRATED_ROW_CODE ? CN_CALIBRATION_ANCHOR : null,
+        calibrationAnchor: CALIBRATION_ANCHORS[r.code] ?? null,
         decomp,
       };
     });
@@ -1957,7 +2011,9 @@ async function refreshCountryCapsSection(db: Db): Promise<void> {
     // 2026-11-14 统一近 12 个月后，各行窗口同为约一年（基点同为
     // 月度序列里最接近「最新点往前 12 个月」的点，实践中同日），
     // 中国行的窗口整个落在 2025-07-31 校准锚点之后，合计因此仍不
-    // 包含 CN 的收录口径跳变增量。合计涨跌的分母 = 各行窗口期初
+    // 包含 CN 的收录口径跳变增量。同日日本行校准落地后，日本行
+    // 改按其校准窗口（2026-08-30 起）计入合计，合计 basis 因此
+    // 为 "mixed"，合计同样不包含 JP 的收录跳变增量。合计涨跌的分母 = 各行窗口期初
     // 市值之和；合计窗口天数 / 起止 = 各行窗口的最早起点 → 最晚
     // 终点；basis = 各行共同 basis（全为 "12m" 时即 "12m"），行间
     // 不一致时为 "mixed"。分解仅当七行全部可分解时给出，避免拿
@@ -2022,7 +2078,7 @@ async function refreshCountryCapsSection(db: Db): Promise<void> {
 
     await writeBlock(db, "country_caps", {
       source:
-        "CompaniesMarketCap 各国上市公司市值榜（按公司是哪国的加总）；走势每年一个点，2023 年的点来自 Wayback 存档（当年收录的公司少得多，只作参考），近年的点由每月记下的记录在年底取样；行首涨跌与每行下面那句账都按近 12 个月算，那句账用 Yahoo Finance 的大盘指数和 Frankfurter / FRED 的汇率算",
+        "CompaniesMarketCap 各国上市公司市值榜（按公司是哪国的加总）；走势每年一个点，2023 年的点来自 Wayback 存档（当年收录的公司少得多，只作参考），近年的点由每月记下的记录在年底取样；行首涨跌与每行下面那句账都按近 12 个月算（日本行从名单稳定下来之后起算），那句账用 Yahoo Finance 的大盘指数和 Frankfurter / FRED 的汇率算",
       asOf: new Date(now).toISOString().slice(0, 10),
       status: "ok",
       fetchedAt: now,
@@ -2038,6 +2094,8 @@ async function refreshCountryCapsSection(db: Db): Promise<void> {
         topChangeBasis,
         // 中国校准锚点（客户端合计窗口标注与脚注据此生成）
         calibrationAnchor: CN_CALIBRATION_ANCHOR,
+        // 日本校准锚点（2026-11-14，客户端合计窗口标注据此生成）
+        jpCalibrationAnchor: JP_CALIBRATION_ANCHOR,
         topDecomp,
       },
     });
@@ -3735,65 +3793,11 @@ async function refreshSlow(ctx: Ctx, force: boolean): Promise<void> {
 // Actions
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// One-time import: Cap 7 early year-end point, 2023-12-19 (user,
-// 2026-11-14: 「Cap 7 去挖 2020–2023 年存档，趋势补长了再统一」).
-// The all-countries page's earliest Wayback capture is 2023-02-20,
-// so NO capture exists within ±45 days of the 2020 / 2021 / 2022
-// year-ends (2022's nearest is 51 days out and was NOT used); the
-// only obtainable year-end point is the last 2023 capture,
-// 2023-12-19 (12 days before year-end), staged at
-// ~/workspace/finance-globe-export/cap7-history-2023.json. This
-// action reads it through the privileged channel, verifies its
-// SHA-256 against the approved value BEFORE parsing anything
-// (mismatch = abort, nothing imported), then writes the 10 markets'
-// points into history_points (series "cap:<CODE>") with their
-// company counts and source="wayback-backfill-early", the TRUE date
-// 2023-12-19 kept. Idempotent: a (series, date) that already exists
-// is never overwritten. NO cap:TOTAL point is written: this file's
-// total is the page HEADLINE total, a different denominator basis
-// from the backfill's per-row sums, and the point exists only as a
-// trend-line level reference (its coverage is far thinner — JP 349
-// companies vs 944 now — so it is never a growth base; the client
-// draws its segment dashed / dim). After writing, the country_caps
-// block is rebuilt through the normal live refresh path. This
-// action is one-time by intent; its removal rides along with the
-// next edit (the same rule retired importCap7ArchiveBackfill in
-// this edit).
-// ---------------------------------------------------------------------------
-
-const CAP7_EARLY2023_EXPECTED_SHA256 =
-  "39359b2289a6af51a0a4db5c2707c6271efe3a7202862b15185efe880eacbd0b";
-const CAP7_EARLY2023_CODES = [
-  "US",
-  "CA",
-  "CN",
-  "TW",
-  "JP",
-  "GB",
-  "IN",
-  "CH",
-  "FR",
-  "KR",
-] as const;
-const CAP7_EARLY2023_DATE = "2023-12-19";
-
-const cap7Early2023ImportResponse = z.object({
-  ok: z.boolean(),
-  error: z.string().nullable(),
-  sha256: z.string().nullable(),
-  expectedSha256: z.string(),
-  sizeBytes: z.number().nullable(),
-  pointDate: z.string().nullable(),
-  markets: z.record(
-    z.string(),
-    z.object({ marketCapUsd: z.number(), companies: z.number() }),
-  ),
-  insertedBySeries: z.record(z.string(), z.number()),
-  skippedExisting: z.record(z.string(), z.number()),
-  totalInserted: z.number(),
-  note: z.string(),
-});
+// (The one-time import action for the 2023-12-19 early point,
+// importCap7Early2023, was retired in the 2026-11-14 edit once
+// its import had landed; the point itself stays in
+// history_points — see the (a2) note in the Cap 7 section
+// header above.)
 
 async function loadDashboard(ctx: Ctx): Promise<z.infer<typeof dashboardResponse>> {
   const db = ctx.db<typeof schema>();
@@ -3871,161 +3875,6 @@ export const Actions = {
       return ctx.executePrivileged(privileged.writeDashboardExport, {
         json,
       });
-    },
-  }),
-
-  importCap7Early2023: defineAction({
-    description:
-      "One-time import of the approved Cap 7 early year-end archive point (2023-12-19, the only 2020–2023 year-end the Wayback Machine holds for the all-countries page): verifies the staged file's SHA-256 (aborts untouched on mismatch), then inserts the 10 markets' market caps + company counts with source=wayback-backfill-early into the cap:<CODE> history series without ever overwriting an existing point, and rebuilds the country-caps block. No cap:TOTAL point is written (the file's total is the page headline figure, a different basis). Idempotent — safe to run again; it reports inserted vs already-present counts per series plus the imported values.",
-    request: z.object({}),
-    response: cap7Early2023ImportResponse,
-    privileged: [privileged.readCap7Early2023],
-    async handler(
-      ctx,
-    ): Promise<z.infer<typeof cap7Early2023ImportResponse>> {
-      const fail = (
-        error: string,
-        extra?: Partial<z.infer<typeof cap7Early2023ImportResponse>>,
-      ): z.infer<typeof cap7Early2023ImportResponse> => ({
-        ok: false,
-        error,
-        sha256: null,
-        expectedSha256: CAP7_EARLY2023_EXPECTED_SHA256,
-        sizeBytes: null,
-        pointDate: null,
-        markets: {},
-        insertedBySeries: {},
-        skippedExisting: {},
-        totalInserted: 0,
-        note: "",
-        ...extra,
-      });
-      let file: { content: string; sizeBytes: number; sha256: string };
-      try {
-        file = await ctx.executePrivileged(privileged.readCap7Early2023, {});
-      } catch (e) {
-        return fail(
-          `存档文件读取失败：${e instanceof Error ? e.message : String(e)}`,
-        );
-      }
-      // Hash gate FIRST: unverified bytes are never parsed or imported.
-      if (file.sha256 !== CAP7_EARLY2023_EXPECTED_SHA256) {
-        return fail(
-          "存档文件 SHA-256 与批准值不符，已中止导入，未写入任何数据",
-          { sha256: file.sha256, sizeBytes: file.sizeBytes },
-        );
-      }
-      let parsed: {
-        points?: Array<{
-          date?: string;
-          markets?: Record<
-            string,
-            { marketCapUsd?: number; companies?: number } | undefined
-          >;
-        }>;
-      };
-      try {
-        parsed = JSON.parse(file.content) as typeof parsed;
-      } catch {
-        return fail("存档文件 JSON 解析失败，已中止导入", {
-          sha256: file.sha256,
-          sizeBytes: file.sizeBytes,
-        });
-      }
-      const points = parsed.points ?? [];
-      if (points.length !== 1) {
-        return fail(
-          `存档文件点数异常（期望 1，实际 ${points.length}），已中止导入`,
-          { sha256: file.sha256, sizeBytes: file.sizeBytes },
-        );
-      }
-      const point = points[0]!;
-      if (point.date !== CAP7_EARLY2023_DATE || !point.markets) {
-        return fail(
-          `存档点日期/市场数据异常（期望 ${CAP7_EARLY2023_DATE}），已中止导入`,
-          { sha256: file.sha256, sizeBytes: file.sizeBytes },
-        );
-      }
-      const markets: Record<
-        string,
-        { marketCapUsd: number; companies: number }
-      > = {};
-      for (const code of CAP7_EARLY2023_CODES) {
-        const v = point.markets[code];
-        if (
-          !v ||
-          typeof v.marketCapUsd !== "number" ||
-          !(v.marketCapUsd > 0) ||
-          typeof v.companies !== "number" ||
-          !(v.companies > 0)
-        ) {
-          return fail(
-            `存档点缺少 ${code} 的市值/公司数，已中止导入`,
-            { sha256: file.sha256, sizeBytes: file.sizeBytes },
-          );
-        }
-        markets[code] = {
-          marketCapUsd: v.marketCapUsd,
-          companies: v.companies,
-        };
-      }
-      const db = ctx.db<typeof schema>();
-      const existing = await db
-        .select()
-        .from(schema.historyPoints)
-        .where(like(schema.historyPoints.series, "cap:%"));
-      const existingKeys = new Set(
-        existing.map((r) => `${r.series}|${r.date}`),
-      );
-      const insertedBySeries: Record<string, number> = {};
-      const skippedExisting: Record<string, number> = {};
-      let totalInserted = 0;
-      for (const code of CAP7_EARLY2023_CODES) {
-        const series = `cap:${code}`;
-        const v = markets[code]!;
-        if (existingKeys.has(`${series}|${CAP7_EARLY2023_DATE}`)) {
-          skippedExisting[series] = 1;
-          continue;
-        }
-        await db.insert(schema.historyPoints).values({
-          series,
-          date: CAP7_EARLY2023_DATE,
-          value: v.marketCapUsd,
-          companies: v.companies,
-          source: "wayback-backfill-early",
-        });
-        existingKeys.add(`${series}|${CAP7_EARLY2023_DATE}`);
-        insertedBySeries[series] = 1;
-        totalInserted += 1;
-      }
-      // Rebuild the country_caps block through the normal refresh so
-      // the yearly trend picks the point up right away. If the live
-      // fetch fails the block keeps its previous values marked stale
-      // and the daily refresh rebuilds it — the imported point
-      // itself is durable.
-      await refreshCountryCapsSection(db);
-      ctx.invalidateQueries();
-      const skipped = Object.keys(skippedExisting);
-      return {
-        ok: true,
-        error: null,
-        sha256: file.sha256,
-        expectedSha256: CAP7_EARLY2023_EXPECTED_SHA256,
-        sizeBytes: file.sizeBytes,
-        pointDate: CAP7_EARLY2023_DATE,
-        markets,
-        insertedBySeries,
-        skippedExisting,
-        totalInserted,
-        note:
-          "SHA-256 校验通过；2023-12-19 存档点按真实日期写入 10 个市场，公司数与 source=wayback-backfill-early 随点保存。" +
-          "未写 cap:TOTAL（文件总数为页面页眉口径，与回填的逐行加总口径不同）。" +
-          "该点收录公司数远少于现在（仅作趋势线水位参考，不作涨幅基点；近 12 个月窗口不触及它）。" +
-          (skipped.length
-            ? ` 已存在的同日点未覆盖：${skipped.join("、")}。`
-            : " 无同日冲突点。") +
-          " 导入后已走正常刷新路径重建 country_caps 板块。",
-      };
     },
   }),
 

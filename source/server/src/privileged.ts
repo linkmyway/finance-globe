@@ -25,7 +25,6 @@ z,
 const EXPORT_ROOT = "/home/hatch/workspace/finance-globe-export";
 const DATA_FILE_NAME = "dashboard-full.json";
 const MANIFEST_FILE_NAME = "manifest.json";
-const EARLY2023_FILE_NAME = "cap7-history-2023.json";
 
 export const privileged = definePrivilegedContracts({
   writeDashboardExport: {
@@ -39,17 +38,6 @@ export const privileged = definePrivilegedContracts({
       sha256: z.string(),
     }),
     capabilities: ["fs.read", "fs.write"],
-    timeoutMs: 30000,
-  },
-  readCap7Early2023: {
-    request: z.object({}),
-    response: z.object({
-      path: z.string(),
-      content: z.string(),
-      sizeBytes: z.number().int().nonnegative(),
-      sha256: z.string(),
-    }),
-    capabilities: ["fs.read"],
     timeoutMs: 30000,
   },
 });
@@ -80,20 +68,5 @@ export const privilegedHandlers = definePrivilegedHandlers(privileged, {
       "utf8",
     );
     return { path, manifestPath, sizeBytes, sha256 };
-  },
-
-  async readCap7Early2023() {
-    // Fixed destination only: the staged Wayback 2023 year-end file
-    // the one-time import action verifies (SHA-256 checked by the
-    // caller against the approved value before anything is imported).
-    const path = join(EXPORT_ROOT, EARLY2023_FILE_NAME);
-    const onDisk = await readFile(path);
-    const sha256 = createHash("sha256").update(onDisk).digest("hex");
-    return {
-      path,
-      content: onDisk.toString("utf8"),
-      sizeBytes: onDisk.byteLength,
-      sha256,
-    };
   },
 });
