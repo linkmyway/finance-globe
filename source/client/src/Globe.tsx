@@ -9,13 +9,24 @@
 
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { ZODIAC_MODEL_URLS } from "./zodiacModels";
 import {
 LAND_COORDS_B64,
 LAND_FLAGS_B64,
 LAND_POINT_COUNT,
 } from "./landData";
 import { LIGHTS_B64, LIGHT_POINT_COUNT } from "./lightsData";
-import { moonLongitude, ZODIAC_SIGNS } from "./moonPhase";
+import {
+ASTRO_PLANETS,
+eclipticPrecessionDeg,
+moonEcliptic,
+moonLongitude,
+planetGeocentricEcliptic,
+sunGeocentricEcliptic,
+zodiacSignFor,
+ZODIAC_SIGNS,
+} from "./moonPhase";
 import { SERPO_FRONTS, SERPO_AWAY_URL } from "./serpoArt";
 import { MANTIS_FATHER, MANTIS_SON, MANTIS_POLE_HOME } from "./mantisArt";
 import {
@@ -93,7 +104,9 @@ export interface GlobeProps {
   /** 银河系取景：full 全盘（默认）/ near 太阳邻域（八星展开）。
    * 第三级「近邻特写」已按用户口径整体下线（2026-11-14），只剩两档 */
   galaxyView?: "full" | "near";
-  /** 点中银河里的太阳标记时回调：全览 ↔ 太阳邻域互切 */
+  /** 银河画布点按回调（2026-11-15 改判）：全览点太阳标记 →
+   * "near"；邻域点银心罗盘标记 → "full"；邻域点太阳系标记只
+   * 回正镜头、不走本回调（不退出邻域） */
   onGalaxyViewChange?: (v: "full" | "near") => void;
   /** 太阳系取景（移动端）：near=近览内圈（默认）/ full=全览八行星 */
   solarView?: "near" | "full";
@@ -141,9 +154,11 @@ const NIGHT_CYCLE_S = 180;
 const NIGHT_START_PHASE_S = 55;
 /**
  * —— 彗星舞台轮值（2026-11-13 用户令「彗星不要同时出现」；同
- * 日晚客串彗星整体下线后改四幕）——
- * 太阳系里的四颗具名彗星（哈雷/恩克/潘斯达斯/艾森）共用一条
- * 320 秒舞台时钟、四幕各 80 秒轮流登场、哈雷起场。任一时刻至
+ * 日晚客串彗星整体下线后改四幕；2026-11-15 第五颗坦普尔–塔特
+ * 尔入列后扩五幕）——
+ * 太阳系里的五颗具名彗星（哈雷/恩克/潘斯达斯/艾森/坦普尔–塔
+ * 特尔）共用一条 400 秒舞台时钟、五幕各 80 秒轮流登场、哈雷
+ * 起场、坦普尔–塔特尔压轴第五幕。任一时刻至
  * 多一颗在场——核/彗发/双尾/名卡/轨道线成套算一个「出现」单
  * 位、随幕同进同出；幕内首尾各 8 秒淡入淡出、幕与幕首尾相接
  * 不重叠（包络只活在自己幕内，交界处前一颗已归零后一颗才
@@ -151,10 +166,10 @@ const NIGHT_START_PHASE_S = 55;
  * 内时间映射到各颗自己的轨道时间：以近日点时刻为幕中点、按
  * 各自活跃跨度缩放（slotScale），使幕边缘活跃度 ≈0——没有谁
  * 亮着脸上下场。舞台相位 30：打开时哈雷位于其幕内 30 秒处；
- * reduced-motion 时舞台冻结在同一相位（只哈雷在场、余三颗隐
+ * reduced-motion 时舞台冻结在同一相位（只哈雷在场、余四颗隐
  * 去）。
  */
-const COMET_STAGE_S = 320;
+const COMET_STAGE_S = 400;
 const COMET_SLOT_S = 80;
 const COMET_STAGE_PHASE = 30;
 const COMET_ENV_S = 8;
@@ -211,18 +226,25 @@ function auToDisplayR(rAU: number): number {
  * 缩在木星轨道内侧）；潘斯达斯 C/2011 L4 q=0.302、e≈1.0003（近抛
  * 物线，展示取 a=100 AU 的等效长椭圆）、i=84.2°；艾森 C/2012 S1
  * q=0.0124（掠日）、e≈1、i=61.9°（展示取 e=0.99996、a=311 AU）。
+ * —— 第五颗入列（2026-11-15，用户令只做彗星这一件）：55P/坦
+ * 普尔–塔特尔，狮子座流星雨母体。根数同取 JPL 发表值：a=10.338
+ * AU、e=0.9056、i=162.49°（逆行）、Ω=235.27°、ω=172.50°，由
+ * a(1−e) 得 q=0.976 AU、a^1.5 得周期 33.2 年，与发表值自洽。
+ * 逆行是它的身份证：倾角与哈雷同档（162° 级），但升交点与哈雷
+ * 差约 177°、近日点幅角差约 61°，轨道面朝向完全不同，远日点
+ * 19.7 AU 也明显小于哈雷的 35 AU——轨道线一出场就分得开。
  * 轨道形状/倾角/升交点/近日点幅角全按真实根数经 perifocal 基底
  * 换算，位置由真近点角直接定（ν 定义椭圆上的点，与开普勒解等
  * 价，且对 e→1 的近抛物线轨道数值稳定）。
  * 摆位口径（诚实标注，与客串彗星同例）：不按真实日期摆位——按
  * 真位放，哈雷现在在约 35 AU 外无尾、艾森 2013 年过近日点时已
- * 解体，四颗里三颗看不见、「拖尾要有区别」无从谈起。故取活跃展
+ * 解体，多数看不见、「拖尾要有区别」无从谈起。故取活跃展
  * 示：各沿自己轨道慢跑，时间轴同样走正切弯折把过境展开；登场
- * 时机走舞台轮值（见 COMET_STAGE_S 处注：四颗彗星轮流独占舞
+ * 时机走舞台轮值（见 COMET_STAGE_S 处注：五颗彗星轮流独占舞
  * 台、从不同时出现，各颗只在自己那一幕里在场）；真实周期与下
  * 次回归/解体事实如实写入各自名卡副行，页面提示片同步标注
  * 「彗星为活跃期示意」。
- * —— 全维逐颗分家（2026-11-13 晚用户总纲「这四颗彗星的设计
+ * —— 全维逐颗分家（2026-11-13 晚用户总纲「这几颗彗星的设计
  * 风格和色彩风格粒子风格要做区分、大小也要有区别」）：不止拖
  * 尾长短宽窄——设计/色彩/粒子/体量各成一套；新海诚式的高明
  * 度辉光质感是共同底味，色相与形态逐颗分家（逐颗色板/描边/
@@ -231,13 +253,20 @@ function auToDisplayR(rAU: number): number {
  * 正色双尾，粒子晶亮规整、成簇绽放，是「标准答案」；
  * 恩克 = 最小最黯——彗发紧凑、整体小一号，灰蓝离子尾 + 暗金
  * 尘埃的灰旧色，粒子稀疏微弱、慢速小粒，磨老了的彗星；
- * 潘斯达斯 = 宽阔暖金——尘埃大扇面四颗最宽、暖金主导，粒子
+ * 潘斯达斯 = 宽阔暖金——尘埃大扇面五颗最宽、暖金主导，粒子
  * 是弥漫的金色尘雾、大粒慢飘；
  * 艾森 = 翠绿纤细——借 2013 年实拍的双原子碳绿彗发作签名
  * 色，离子尾极细极长走青绿，粒子翠绿细喷、快而 sharp，靠长
  * 度取胜。原逐颗拖尾形态差异（长/宽/扇面/射线）保留并入各自
  * 风格。近日点粒子喷流逐颗一份（风格档见构建段 sparks
  * 注），过近日点时喷发。
+ * 坦普尔–塔特尔 = 冰刃小核（2026-11-15 入列）——核仅约 3.6 km，
+ * 体量第二小（comaK 0.68，仅大于恩克）、但亮度不压黯（brightK
+ * 0.98，与恩克的灰旧黯淡正相反）：彗发紧凑烧白、离子尾是一条
+ * 窄而直的冰蓝刃（宽 0.15、长 2.1，宽比尘埃/离子 ≈3.5 在报告
+ * 带内），色板走全场最白的冰白→冰青→靛紫、尘埃走银白薰衣草，
+ * 粒子是小而快而亮的冰晶针点（sparkMode 5）——小、锐、白，是
+ * 它与哈雷的饱和蓝金、恩克的灰旧之间的辨识位。
  */
 export interface NamedCometDef {
   id: string;
@@ -290,8 +319,8 @@ export interface NamedCometDef {
   comaHaloMid: string;
   comaHaloOut: string;
   /** 近日点粒子风格：色阶档（1 哈雷冰晶 / 2 恩克灰烬 / 3 潘斯
-   * 达斯金尘 / 4 艾森翠绿）/ 粒数 / 速度系数 / 尺寸系数 / 亮
-   * 度系数（见 makeCometSparks） */
+   * 达斯金尘 / 4 艾森翠绿 / 5 坦普尔冰刃）/ 粒数 / 速度系数 /
+   * 尺寸系数 / 亮度系数（见 makeCometSparks） */
   sparkMode: number;
   sparkCount: number;
   sparkSpeed: number;
@@ -512,6 +541,74 @@ export const NAMED_COMETS: NamedCometDef[] = [
     sparkSpeed: 1.5,
     sparkSize: 0.8,
     sparkBright: 1.05,
+  },
+  {
+    id: "tempel",
+    name: "55P/坦普尔–塔特尔",
+    info: "周期 33.2 年 · 狮子座流星雨母体 · 下次回归 2031 年",
+    // JPL 发表根数：a=10.338、e=0.9056、i=162.49°（逆行）、
+    // Ω=235.27°、ω=172.50°；q = a(1−e) = 0.976 AU、远日点
+    // 19.70 AU（闭合整圈、示意半径 ≈6.60，在全览拟合内）
+    a: 10.338,
+    e: 0.90555,
+    inclDeg: 162.49,
+    nodeDeg: 235.27,
+    periArgDeg: 172.5,
+    onsetAU: 3.0,
+    // cycleS/periAtS 沿全表口径（periAtS = 0.3×cycleS）；
+    // slotScale 按与四颗同一条反解式核定：幕边缘（幕半宽 40 秒
+    // ×slotScale）处 r 恰达 onsetAU——p=1.861、onset 3.0 →
+    // ν=2.004 rad → s=0.784τ=37.6 秒 → 37.6/40 = 0.94（同式复算
+    // 四颗得 1.22/0.95/1.87/4.58，与现行 1.23/0.95/1.86/4.6 吻合）
+    cycleS: 240,
+    periAtS: 72,
+    slotScale: 0.94,
+    // 小而锐利：体量第二小（仅大于恩克）、亮度不压黯——紧凑
+    // 烧白的小彗发，与恩克「小而黯」正相反
+    comaK: 0.68,
+    brightK: 0.98,
+    // 离子尾 = 冰刃：窄（0.15，仅次于艾森 0.12）、直、中长
+    // （2.1）；尘埃窄扇（0.52），尘埃/离子宽比 ≈3.5（报告带内）
+    ionLen: 2.1,
+    ionOp: 0.62,
+    ionWidth: 0.15,
+    ionLayers: [0.8, 0.54, 0.34],
+    dustOp: 0.36,
+    dustWidth: 0.52,
+    dustLayers: [0.6, 0.38, 0.22],
+    dustHistK: 0.004,
+    orbitColor: "#d9c8ff",
+    cardPrio: 2,
+    // 坦普尔–塔特尔：冰刃色板——全场最白：离子纯白起程、冰青
+    // 中段、靛紫收梢（比哈雷的饱和蓝→品紫更白更冷）；尘埃走
+    // 银白→薰衣草（比哈雷的粉尘更银、比恩克的灰粉更亮）
+    ionPalette: [
+      { o: 0, hex: "#FFFFFF" },
+      { o: 0.18, hex: "#CFF4FF" },
+      { o: 0.45, hex: "#5EC8F2" },
+      { o: 0.72, hex: "#6E7CF0" },
+      { o: 1, hex: "#9D6FE8" },
+    ],
+    dustPalette: [
+      { o: 0, hex: "#FFFFFF" },
+      { o: 0.3, hex: "#EFEAF6" },
+      { o: 0.62, hex: "#C4B2E0" },
+      { o: 0.85, hex: "#9484C4" },
+      { o: 1, hex: "#9484C4" },
+    ],
+    ionRim: "#AEE9FF",
+    dustRim: "#C4B2E0",
+    comaCore: "#FFFFFF",
+    comaInner: "#F2FBFF",
+    comaHaloMid: "#7FD4F0",
+    comaHaloOut: "#B9A8F0",
+    // 冰刃粒子：小粒、快、亮——针点状冰晶（狮子座流星 71 km/s
+    // 的快也呼应在此：速度系数仅次于艾森、尺寸全场最小档）
+    sparkMode: 5,
+    sparkCount: 140,
+    sparkSpeed: 1.35,
+    sparkSize: 0.65,
+    sparkBright: 1.1,
   },
 ];
 /**
@@ -3051,20 +3148,29 @@ export function Globe({
     let curtainPr = Math.min(window.devicePixelRatio || 1, 3);
     // —— 星幕配色变体表（2026-11-13 00:08 定版，用户拍板「按这
     // 套配色施工」，取代 23:50 的单纯白紫换色）：每颗坠星生成时
-    // 按权重抽一档、整段生命用该档渐变——① 月白紫 55%（主力）：
+    // 按权重抽一档、整段生命用该档渐变——① 月白紫（主力）：
     // 芯 #FFFFFF、头微染 #EDE9FF、尾 →#C4B5FD、光晕 #B8A9FF；
-    // ② 蓝白 27%（分给最快最细的那批）：头微染 #E0EAFF、尾
-    // →#A9C2FF、光晕 #93B4FF；③ 钙紫粉 13%（分给较慢较粗的那
-    // 批、四档中最艳、靠稀少控场）：头微染 #FBE9FF、尾 →#E9B8FF
-    // →#C99BF5、光晕 #D8A7F5；④ 镁绿白 5%：头微染 #E6FFF2、尾
-    // →#B9E8D2（高度降饱和的薄荷白）。另约 3% 任意档叠加火流星
-    // 放大（同色系、尺寸/亮度 1.6–2×、不换色，取代旧的火流星分
-    // 段概率 4%/8%）。纪律：同档内只许 ±6° 色相 / ±5% 明度微抖
+    // ② 蓝白（分给最快最细的那批）：头微染 #E0EAFF、尾
+    // →#A9C2FF、光晕 #93B4FF；③ 钙紫粉（较慢较粗、四档中最艳、
+    // 靠稀少控场）：头微染 #FBE9FF、尾 →#E9B8FF→#C99BF5、光晕
+    // #D8A7F5；④ 镁绿白：头微染 #E6FFF2、尾 →#B9E8D2（高度降
+    // 饱和的薄荷白）。纪律：同档内只许 ±6° 色相 / ±5% 明度微抖
     // （生成时逐通道 ±5% 预抖、不许跨档乱变）；禁金/黄主导、禁
-    // 青/蓝绿实色（撞光缆）、禁实心满饱和 #A78BFA/#5F83FF（撞
-    // 金融弧——流星紫更淡、带渐变、瞬时、低 α 光晕）、禁橙红
-    // （撞彗星燃烧段）。stops = [偏移, rgb, alpha 系数]，尾端
-    // alpha 归零渐隐；haloA = 光晕中段 alpha（低 α 口径）。
+    // 实心满饱和 #A78BFA/#5F83FF（撞金融弧——流星紫更淡、带渐
+    // 变、瞬时、低 α 光晕）。stops = [偏移, rgb, alpha 系数]，
+    // 尾端 alpha 归零渐隐；haloA = 光晕中段 alpha（低 α 口径）。
+    // —— 2026-11-16 狮子座注入（用户令「流星雨可以加入火流星和
+    // 蓝绿色流星、特效拉满」，素材 = 用户亲发狮子座科普文）：
+    // 新增两档阶级专属色——⑤ 蓝绿（狮子座标志：流星体金属元
+    // 素高速燃烧的蓝绿光）：芯白、头微染 #D6FFF0、尾 →#40E0B2
+    // →#12B8C4、光晕 #34E2BA，高饱和实色；⑥ 火流星（橙红燃烧
+    // 色阶）：芯白、头 #FFEECD、尾 →#FFA642→#F0541A→#C8300C、
+    // 光晕 #FF8A36。旧纪律中「禁青/蓝绿实色（撞光缆）」「禁橙
+    // 红（撞彗星）」两条自此只约束①–④ 常规四档：蓝绿与橙红是
+    // 用户点名的狮子座两大招牌、只发给⑤⑥ 两个新阶级，不许漏
+    // 进常规档。阶级与占比见 animate 生成段（普通/明亮/火流星
+    // /蓝绿/最高阶陨石五路分流）；常规四档内部权重改 50/27/15
+    // /8（月白紫仍是全场第一大色：全口径约 34%）。
     type CurtainVariantDef = {
       stops: Array<{ o: number; rgb: [number, number, number]; a: number }>;
       halo: [number, number, number];
@@ -3125,6 +3231,34 @@ export function Globe({
         ],
         halo: [205, 242, 224],
         haloA: 0.34,
+      },
+      {
+        // 蓝绿（2026-11-16 狮子座阶级：金属燃烧蓝绿光，高饱和、
+        // 高辨识——与④ 镁绿白的降饱和薄荷白刻意拉开：本档是
+        // 「实色蓝绿」，④ 是「近白微绿」，同屏不混）
+        stops: [
+          { o: 0, rgb: [255, 255, 255], a: 1 },
+          { o: 0.2, rgb: [214, 255, 240], a: 0.95 },
+          { o: 0.55, rgb: [64, 224, 178], a: 0.92 },
+          { o: 0.85, rgb: [18, 184, 196], a: 0.8 },
+          { o: 1, rgb: [18, 184, 196], a: 0 },
+        ],
+        halo: [52, 226, 186],
+        haloA: 0.5,
+      },
+      {
+        // 火流星（2026-11-16 狮子座阶级：橙红燃烧色阶，只发给
+        // 火流星阶级；与陨石的熔边橙红同语系——一个是光、一个
+        // 是实心岩体，材质不同不混读）
+        stops: [
+          { o: 0, rgb: [255, 255, 255], a: 1 },
+          { o: 0.18, rgb: [255, 238, 205], a: 0.98 },
+          { o: 0.45, rgb: [255, 166, 66], a: 0.95 },
+          { o: 0.75, rgb: [240, 84, 26], a: 0.85 },
+          { o: 1, rgb: [200, 48, 12], a: 0 },
+        ],
+        halo: [255, 138, 54],
+        haloA: 0.52,
       },
     ];
     // 亮头柔光点（按档离线预渲染 4 张，逐帧 drawImage 盖印，避
@@ -3319,6 +3453,27 @@ export function Globe({
         grad.addColorStop(1, "rgba(180,45,12,0)");
         g.fillStyle = grad;
         g.fillRect(0, 0, 256, 256);
+      }
+      return cv;
+    })();
+    // 火流星余迹辉团（2026-11-16 新增）：火流星划过后滞留数秒
+    // 的发光余迹盖印——暖白芯 → 橙 → 深红外缘的软径向，与陨石
+    // 余烬辉（rockGlowSprite）同语系但更散更淡：余迹是「光迹」
+    // 不是「火」，绘制走加色、低 α、随龄膨胀飘散（见
+    // curtainWakes 池与绘制段）
+    const wakeSprite = (() => {
+      const cv = document.createElement("canvas");
+      cv.width = 160;
+      cv.height = 160;
+      const g = cv.getContext("2d");
+      if (g) {
+        const grad = g.createRadialGradient(80, 80, 0, 80, 80, 80);
+        grad.addColorStop(0, "rgba(255,214,150,0.85)");
+        grad.addColorStop(0.35, "rgba(255,140,60,0.42)");
+        grad.addColorStop(0.7, "rgba(220,70,22,0.16)");
+        grad.addColorStop(1, "rgba(190,50,14,0)");
+        g.fillStyle = grad;
+        g.fillRect(0, 0, 160, 160);
       }
       return cv;
     })();
@@ -3928,6 +4083,9 @@ export function Globe({
     // —— 背景八星（夜空四单 · 太阳系背景，2026-11-12 移师、深夜
     // 3D 化；设计稿 = goal-5 GOAL.md「背景星空冬夏大三角设计」位
     // 置条修订 + 色板节）——
+    // 2026-11-15 模式口径（用户点名）：本组在太阳系**全览**整组
+    // 隐藏（星体/连线/名签，见 animate 名星段 starModeFade），
+    // 默认近距模式按下方季节权重逻辑正常体现。
     // 冬日大三角（参宿四/天狼星/南河三，近等边）+ 夏日大三角（天津
     // 四/牛郎星/织女星，瘦长）+ 天鹅座β星（Albireo：一金一蓝双点紧
     // 挨永不重合，置天津四近旁同属一只天鹅）+ 角宿一（独立、不连
@@ -3944,10 +4102,10 @@ export function Globe({
     // 间移动时近星与远星表观位移不同、视差由此而来，不做任何屏
     // 幕锚定补偿。深度仍足够远（系统后方 15–38 世界单位，行星系
     // 半径 ≲5.2），恒为最底层背景，不飘进行星轨道之间、也不与
-    // 星街彗星的最外圈轨道争位。默认总览构图按构造守恒：落位以
-    // 默认总览机位为参考视角、沿各星 (nx, ny) 视线方向放到各自
-    // 深度上，参考视角下投影与旧平面板严丝合缝——上方宽缓弧带、
-    // 冬近等边/夏瘦长的形状识别度原样。两组三角的连线改空间曲
+    // 星街彗星的最外圈轨道争位。默认构图按构造守恒：落位以默认
+    // 近览机位为参考视角、沿各星 (sx, sy) 视线方向放到各自深度
+    // 上（设计单位 2026-11-15 改为像素等距口径，见落位处长注），
+    // 参考视角下投影与设计坐标严丝合缝。两组三角的连线改空间曲
     // 线（二次贝塞尔、控制点沿深度方向外推弓起，见布局函数），
     // 角宿一仍不连线。
     // 星色按光谱真色（色板 hex），光晕同色低透明、饱和克制，不做
@@ -3991,9 +4149,11 @@ export function Globe({
        * 不许估算值长期冒充（2026-11-13「位置要准确」定版） */
       labelW: number;
       labelH: number;
-      /** 归一化方位（±1 = 参考总览机位视锥半宽/半高），恒在上方带 */
-      nx: number;
-      ny: number;
+      /** 设计方位（像素等距单位：1 = 半个画布高，x/y 同标尺）：
+       * 参考机位下投影像素偏移 = (sx, sy) × 半画布高——形状不随
+       * 画布宽高比变形（2026-11-15 拉长修正，见落位处长注） */
+      sx: number;
+      sy: number;
       /** 世界深度：太阳系原点后方多少世界单位（z = −depth），逐星各异 */
       depth: number;
       /** 登记尺度（布局时按各星的距离因子换算成精灵世界尺度） */
@@ -4069,8 +4229,8 @@ export function Globe({
     const addNamedStar = (
       name: string,
       group: StarGroupId,
-      nx: number,
-      ny: number,
+      sx: number,
+      sy: number,
       depth: number,
       colorHex: string,
       size: number,
@@ -4182,8 +4342,8 @@ export function Globe({
         labelCy,
         labelW,
         labelH,
-        nx,
-        ny,
+        sx,
+        sy,
         depth,
         size,
         twPeriod: twSpec.period,
@@ -4203,17 +4363,42 @@ export function Globe({
       namedStars.push(rec);
       return rec;
     };
-    // —— 落位（2026-11-12 深夜 3D 化）：(nx, ny) 仍是参考总览视
-    // 角下的归一化方位——整组沿一条宽缓的弧排布（弧度呼应轨道环
-    // 的曲率，像最外圈轨道再往外放大的远侧弧），呈一道弧形背景
-    // 带压在系统后上方；组间距比初版拉宽约两成，组内边长比与形
-    // 状（冬近等边/夏瘦长）原样，ny 已含弧线弯沉（中段微抬、两
-    // 翼缓降）。新增第五参 depth = 世界深度（原点后方、世界单
-    // 位）：按各星真实距离的座次排（光年数只取序、压进 15–38 的
-    // 可感知视差带）——天狼星 8.6 ly 最近、次南河三 11.5、牛郎
-    // 星 17、织女星 25，再跳到角宿一 ~250、天鹅座β ~430、参宿
-    // 四 ~550，天津四 ~2600 ly 独占最远。深度全 ≥15，恒在行星
-    // 系（半径 ≲5.2）与星街彗星轨道之后，不与之争位。
+    // —— 落位（2026-11-12 深夜 3D 化；2026-11-15 拉长修正）：
+    // 设计坐标 (sx, sy) = 参考近览机位下的像素等距方位（单位 =
+    // 半个画布高，x/y 同标尺）。旧口径 (nx, ny) 是 NDC 分数：
+    // NDC→像素时 x 按半画布宽、y 按半画布高缩放，竖屏全屏舞台
+    // （宽高比 ≈0.46、高/宽 ≈2.16）下纵向每单位像素是横向的
+    // 2.16 倍——公式量测（390×844 近览默认帧）：冬三角边长比
+    // 1.000/2.184/2.028（真实 1.000/1.046/1.004，两长边偏差
+    // +109%/+102%）、夏三角 1.000/2.076/2.679（真实 1.000/
+    // 1.431/1.590），即用户实报「被拉长」。有限深度视差不是主
+    // 因：默认帧落位时相机距 = 布局参考距，逐星因子
+    // (zRef+depth)/(C+depth) 恒 1，深度在该帧零贡献——拉长纯
+    // 系设计空间各向异性。新口径下两组顶点按真实角距嵌入
+    // （冬：25.9°/27.1°/26.0° 近等边，冬组另带 +5° 整体倾角；
+    // 夏：23.9°/34.2°/38.0° 瘦长，朝向与旧构图一致：参宿四/
+    // 天津四在上、天狼星/牛郎星在下），同乘 0.0092/° 落位，
+    // 参考帧像素边长比与真实角距比偏差 ≤0.3%（公式复核）。
+    // 整组纵向位置两度调整：拉长修正轮先自质心距顶 26.4% 下移
+    // 到 31.1%（最高星 12.5% → 23.3%）脱离顶部 UI 挤压；同日晚
+    // 用户真机裁决「大三角位置再往上，还是不够高」——整组刚性
+    // 上移 Δsy = +0.22（全员同量、形状/边长比/深度一字不动）：
+    // 六顶点质心距顶 31.1% → 20.1%、最高星（天津四）23.3% →
+    // 12.3%，平移量 = 画布高的 11.0%（≈93px @844）。约束核算：
+    // 最高星中心 @844 距顶 ≈104px，仍在顶栏药丸下沿（顶距
+    // max(12px, 安全区) + 药丸 30px）之下；左侧星名签若贴近安
+    // 全带由既有 topSafeForSpan 翻到星点下方，不被药丸盖住；
+    // 同轮删除的黄道环注释（原占顶 3.9rem 一行）也让出了这条
+    // 横带。冬/夏两组质心分别距顶 19.9% / 20.2%。
+    // 第五参 depth = 世界深度（原点后方、世界单位）：按各星真
+    // 实距离的座次排（光年数只取序、压进 15–38 的可感知视差
+    // 带）——天狼星 8.6 ly 最近、次南河三 11.5、牛郎星 17、织
+    // 女星 25，再跳到角宿一 ~250、天鹅座β ~430、参宿四 ~550，
+    // 天津四 ~2600 ly 独占最远。深度全 ≥15，恒在行星系（半径
+    // ≲5.2）与星街彗星轨道之后，不与之争位；锚定方式仍是沿参
+    // 考机位视线方向放深度（非拍平）：相机离开参考位（聚焦/
+    // 缩放/平移）时近星移多远星移少，视差照旧——如近览内捏合
+    // 2× 时天狼星与天津四的投影缩放因子差约 14%。
     // 星色提色对照（2026-11-13，色相身份不变、饱和上调到明显
     // 档；旧 → 新）：参宿四 #ff9e45 → #ff7d2a（橙红读得出橙红）、
     // 天狼星 #dcebff → #a9c9ff（蓝白读得出蓝）、南河三 #fff2d4 →
@@ -4223,34 +4408,34 @@ export function Globe({
     // β蓝 #6fa8ff → #4a86ff（更蓝，金蓝对比拉开）、角宿一
     // #dce9ff → #9db4ff。饱和守上限：无霓虹荧光、不过曝成色块
     // 冬日大三角（近等边）：参宿四橙红是红超巨星的签名，不漂白
-    const wBetelgeuse = addNamedStar("参宿四", "winter", -0.62, 0.74, 33, "#ff7d2a", 0.78, 0.9);
-    const wSirius = addNamedStar("天狼星", "winter", -0.86, 0.24, 15, "#a9c9ff", 0.88, 1.0);
-    const wProcyon = addNamedStar("南河三", "winter", -0.36, 0.28, 17.5, "#ffe396", 0.68, 0.8);
+    const wBetelgeuse = addNamedStar("参宿四", "winter", -0.225, 0.744, 33, "#ff7d2a", 0.78, 0.9);
+    const wSirius = addNamedStar("天狼星", "winter", -0.335, 0.52, 15, "#a9c9ff", 0.88, 1.0);
+    const wProcyon = addNamedStar("南河三", "winter", -0.098, 0.541, 17.5, "#ffe396", 0.68, 0.8);
     // 夏日大三角（瘦长）。名签落位已全员统一为紧贴锚定（星点
     // 正上方居中）：玻璃卡时代给织女星定的偏左、给天津四/天鹅
     // 座β/参宿四定的偏下都是卡面体积的补丁，新格式下一并作
     // 废，此处不再有任何逐颗落位参数
-    const sDeneb = addNamedStar("天津四", "summer", 0.64, 0.75, 38, "#eef4ff", 0.7, 0.78);
-    const sVega = addNamedStar("织女星", "summer", 0.36, 0.6, 22.5, "#a3c2ff", 0.8, 0.88);
-    const sAltair = addNamedStar("牛郎星", "summer", 0.7, 0.22, 20, "#ffffff", 0.72, 0.8);
+    const sDeneb = addNamedStar("天津四", "summer", 0.148, 0.754, 38, "#eef4ff", 0.7, 0.78);
+    const sVega = addNamedStar("织女星", "summer", 0.055, 0.555, 22.5, "#a3c2ff", 0.8, 0.88);
+    const sAltair = addNamedStar("牛郎星", "summer", 0.36, 0.476, 20, "#ffffff", 0.72, 0.8);
     // 天鹅座β星（Albireo）：天津四近旁，一金一蓝双点紧挨永不重合
     // （组间距拉宽不拆这对「一尾一嘴」）；名签按定名写「天鹅座β
     // 星」，只挂在金点上；蓝点无名签不受影响
-    const albireo = addNamedStar("天鹅座β星", "summer", 0.56, 0.66, 31, "#ffab1a", 0.52, 0.66);
+    const albireo = addNamedStar("天鹅座β星", "summer", 0.1, 0.702, 31, "#ffab1a", 0.52, 0.66);
     {
-      // 蓝点：沿天津四→金点方向再错开一线间隙（归一化 0.038，与旧
-      // 版 0.13 世界单位 @ 星距≈13.5 的角间隙相当）；深度与金点
-      // 同为 31——这对双星在 3D 里也是紧挨的一对，任意视角下间
-      // 隙不胀不缩、永不重合；蓝点无名签，核心色走与金点同一套
-      // 「光谱色向白提亮」构造
-      const dirx = albireo.nx - sDeneb.nx;
-      const diry = albireo.ny - sDeneb.ny;
+      // 蓝点：沿天津四→金点方向再错开一线间隙（等距设计单位
+      // 0.030 ≈ 参考帧 13px）；深度与金点同为 31——这对双星在
+      // 3D 里也是紧挨的一对，任意视角下间隙不胀不缩、永不重
+      // 合；蓝点无名签，核心色走与金点同一套「光谱色向白提
+      // 亮」构造
+      const dirx = albireo.sx - sDeneb.sx;
+      const diry = albireo.sy - sDeneb.sy;
       const dl = Math.hypot(dirx, diry) || 1;
       addNamedStar(
         "",
         "summer",
-        albireo.nx + (dirx / dl) * 0.038,
-        albireo.ny + (diry / dl) * 0.038,
+        albireo.sx + (dirx / dl) * 0.03,
+        albireo.sy + (diry / dl) * 0.03,
         31,
         "#4a86ff",
         0.38,
@@ -4258,17 +4443,17 @@ export function Globe({
         false,
       );
     }
-    // 角宿一：独立成星、不连线，季节自成一档（春季峰值）；落在弧
-    // 带左翼外端——与冬三角拉开组间距、仍在上方带内，不许贴近画
-    // 面中线，免得聚焦近景时侵入星体主体区域。
+    // 角宿一：独立成星、不连线，季节自成一档（春季峰值）；落在
+    // 冬三角左翼外侧——与冬三角拉开组间距、仍在上方带内，不许
+    // 贴近画面中线，免得聚焦近景时侵入星体主体区域。
     // 身份注（2026-11-13 用户问「冬季大三角左侧的星星怎么没标
     // 签，是 spica 吗」——答：是，就是角宿一）：它贴在天狼星左
-    // 上方（归一化距 ≈0.146）。名签口径已经用户同日晚间改判
+    // 上方（等距设计距 ≈0.101）。名签口径已经用户同日晚间改判
     // （见 animate 背景八星段）：角宿一名签破例全年常驻（淡季
     // 压暗地板 0.42），只有星光仍走季节曲线——淡季是微光星点
     // 带着一张压暗的名签，春季连光带名一起回来。本轮格式统
     // 一后常驻口径平移不变，只是换成行星标签同款小标签
-    addNamedStar("角宿一", "spica", -0.9, 0.38, 28, "#9db4ff", 0.72, 0.82);
+    addNamedStar("角宿一", "spica", -0.41, 0.58, 28, "#9db4ff", 0.72, 0.82);
     // 组内连线：极细淡线，现为空间曲线——每边一条二次贝塞尔、
     // 每边 TRI_EDGE_SEGS 段折线逼近；顶点由 layoutStarWorld 按
     // 星体世界坐标一次算定（星位恒定，逐帧零重写），透明度仍
@@ -4301,18 +4486,22 @@ export function Globe({
     };
     const winterTri = makeTriangleLines([wBetelgeuse, wSirius, wProcyon]);
     const summerTri = makeTriangleLines([sDeneb, sVega, sAltair]);
-    // —— 3D 布局（首次进太阳系时一次算定，之后恒定）：以默认总览
-    // 机位为参考视角（取景拟合距离 zRef + 当下宽高比，与 resize
-    // 的 solarFitZ 同式），把每颗星沿其 (nx, ny) 视线方向放到各
-    // 自深度 depth 上：x = nx·(zRef+depth)·tanV·aspect、
-    // y = ny·(zRef+depth)·tanV、z = −depth。参考视角下投影与旧
-    // 平面板的 (nx, ny) 严丝合缝（上方弧带构图、两组三角的屏幕
-    // 形状原样），但世界坐标从此固定——相机移动时视差自然产
-    // 生。表观尺寸按角直径守恒换算：精灵尺度 ∝ (zRef+depth)/15
-    // （15 = 旧主页口径的星距参考），参考视角下与旧板同大；聚
-    // 焦视角下近星自然略大、远星略小，是深度的一部分，不做屏
-    // 幕锚定补偿。名签不设世界锚点：卡片逐帧直锚星点本身的投
-    // 影 + 固定屏幕间隙（见 addNamedStar 与 animate 名签段）。
+    // —— 3D 布局（首次进太阳系时一次算定，之后恒定）：以默认近
+    // 览机位为参考视角（取景拟合距离 zRef，与 resize 的
+    // solarFitZ 同式），把每颗星沿其 (sx, sy) 视线方向放到各自
+    // 深度 depth 上：x = sx·(zRef+depth)·tanV、
+    // y = sy·(zRef+depth)·tanV、z = −depth。参考视角下 NDC =
+    // (sx/aspect, sy)，投影像素偏移恰为 (sx, sy)×半画布高——
+    // x 式中 aspect 与投影的水平 tan 互消，世界落位本身不带宽
+    // 高比，形状在任何宽高比的参考帧都不变形（2026-11-15 拉
+    // 长修正：旧式 x 带 aspect、设计空间是 NDC，竖屏下纵向被
+    // 像素标尺放大 2.16 倍，见落位处长注）。世界坐标从此固
+    // 定——相机移动时视差自然产生。表观尺寸按角直径守恒换
+    // 算：精灵尺度 ∝ (zRef+depth)/15（15 = 旧主页口径的星距参
+    // 考），参考视角下与旧板同大；聚焦视角下近星自然略大、远
+    // 星略小，是深度的一部分，不做屏幕锚定补偿。名签不设世界
+    // 锚点：卡片逐帧直锚星点本身的投影 + 固定屏幕间隙（见
+    // addNamedStar 与 animate 名签段）。
     // 连线曲线：每边一条二次贝塞尔——控制点 = 边中点沿径向
     // （离原点方向）外推 0.10×边长、再向深处沉 0.16×边长，曲线
     // 因此既顺着深度弓起、又微微向外张开；从参考视角看弓幅温
@@ -4327,8 +4516,8 @@ export function Globe({
       for (const ns of namedStars) {
         const distCam = zRef + ns.depth;
         const distK = distCam / 15;
-        const x = ns.nx * distCam * tanV * camera.aspect;
-        const y = ns.ny * distCam * tanV;
+        const x = ns.sx * distCam * tanV;
+        const y = ns.sy * distCam * tanV;
         ns.glow.position.set(x, y, -ns.depth);
         ns.core.position.copy(ns.glow.position);
         ns.glowBase = ns.size * distK * STAR_SIZE_K;
@@ -4408,14 +4597,70 @@ export function Globe({
     // 阳置 (0, 8.15 kpc)、银心原点；八星由赤道坐标经标准旋转矩阵
     // 换算银河坐标后按真实距离落位。本地坐标映射：x = 银面 X、
     // y = 盘面高度、z = −银面 Y（太阳方向银面 +Y → 本地 −z，组带
-    // 0.62 rad 倾角后落在画面上方，与论文图 3 俯视同向）。
+    // 全览落定倾角后落在画面上方，与论文图 3 俯视同向）。
     // 构建延迟到首次进入银河模式的那一帧（主页/太阳系零成本）；
     // 星点全走 GPU Points + 辉光纹理，桌面约 7.5 万点、移动约
     // 4.5 万点。银河自转 = 绕银轴 2π/26 分钟——近乎静止的庄重
     // 慢转（用户刚投诉过太阳系旧转速太快），近览时冻结防邻域漂移。
     const GAL_S = 0.5; // 世界单位 / 千秒差距
+    /**
+     * 纵向表现性拉伸（2026-11-15 23:45 元灿亲口改口径：
+     * 「可以拉高 z，而且应该大幅拉高以改变粒子的分布增强
+     * 表现力」——此前「禁 z 拉伸」作废，其本是「从未批准」
+     * 而非明令；23:50 再令「能拉多大就拉多大」）：落点 =
+     * 薄盘系（盘面薄成分/旋臂/辉光/尘带/星团/HII/细尘）
+     * ×8（薄盘标高 0.30→2.40 kpc、旋臂 0.06→0.48），厚
+     * 盘成分单独 ×3.5（0.95→3.33——全额 ×8 时其 Laplace
+     * 长尾把 16% 的星撒到 ±20 kpc、盘读成球云，是先到
+     * 的可读性界）；等效盘厚（质量加权平均标高）0.404→
+     * 2.55 kpc ≈ ×6.3。取景界复核：薄盘 90% 质量纵向半
+     * 幅 ±2.3×1.2 wu ≈ ±2.8 wu，与盘面投影半高 4.3 wu
+     * 同点叠加只在 r≈15 kpc 极稀疏尾部发生、亮盘（r≤
+     * 5.5 kpc）纵向总半幅 ≈5.9 wu < 放大后可用半高
+     * 6.1 wu（移动）/7.1 wu（桌面），不裁。棒/核球 z 高
+     * 斯另用 ×2（近球形体全额拉成纺锤、反噬银心收束）。
+     * 属艺术表现层：Xu 旋臂 x–y 形状、星数、R₀、5 kpc
+     * 标尺、邻域真实测距星一律不经此系数（口径全文见
+     * DATA-PLAN 本轮条目）
+     */
+    const GAL_Z_STRETCH = 8;
+    /** 厚盘成分的拉伸系数（可读性界，见上） */
+    const GAL_Z_THICK = 3.5;
+    /**
+     * 全览放大（2026-11-15 晚，元灿：「整体稍微放大」）：
+     * 全览组缩放统乘 (1 + 本值) = ×1.12（工单域 +10–15%
+     * 的落点），只经 (1−eNear) 混入——邻域取景/倍率口径
+     * 零影响；35° 视角与 galaxyFitZ 不动。5 kpc 标尺与盘
+     * 面同在 galaxyGroup 内、同比缩放，标尺真值由构造守
+     * 恒（标尺世界长与盘面 kpc 世界长同乘 1.12，比值不
+     * 变）；亮盘外缘余量：移动端盘径 0.80→0.90 画布高、
+     * 桌面亮盘（5.5 wu）6.16 对半幅 8.0，仍在框内
+     */
+    const GAL_FULL_BOOST = 0.12;
+    /**
+     * 银河全览落定倾角（口径：组 rotation.x = 相机视线与银盘
+     * 平面的夹角，即离面倾角）。沿革：初版 0.62 rad = 离面
+     * 35.5°；2026-11-15 立体感修正轮抬到 0.96 rad = 55°（治
+     * 「看上去还是一个平面」）；同日晚质感纠正轮（元灿裁决
+     * 「视角要调的平行一些，不然俯瞰更薄」）**改回更平行**：
+     * 0.61 rad = 离面 35°——55° 的斜俯把盘面表观压扁、粒子
+     * 稀疏感被放大成「CD」；35° 下盘面表观纵横比 sin(0.61)
+     * ≈ 0.57，视线更贴盘面，核球隆起、银道面亮带与厚盘/晕
+     * 的纵向轮廓在近平行视角里成剪影，厚度感靠视角＋光感
+     * 做（当轮口径：不动逐星 z；该 z 禁令已于 2026-11-15
+     * 23:45 被元灿亲口撤销并反转为大幅拉高，见 GAL_Z_
+     * STRETCH 注——本段只记倾角沿革）。全览纵
+     * 拖夹取 [0.18, 1.25] 不变；邻域入场极角恒 +0.62
+     * （galEntryPol；旧 ±0.62 按相位选符号已于 2026-11-16
+     * 旋转轴对齐轮废止——负极角即镜像，见 galEntryPol 注）
+     * 是另一口径，不动；退出邻域与退出银
+     * 河模式的倾角复位都回到本值（各复位点引用本常量，无
+     * 旧值残留）。5 kpc 标尺随新倾角同式复算内移（见构建
+     * 段标尺头注）。
+     */
+    const GAL_FULL_TILT = 0.61;
     const galaxyGroup = new THREE.Group();
-    galaxyGroup.rotation.x = 0.62;
+    galaxyGroup.rotation.x = GAL_FULL_TILT;
     // YXZ：先偏航（邻域环视，绕太阳）后俯仰（盘面倾角）——帧段
     // 每帧按阻尼量写 rotation.y/x，拖拽只写目标（见 galYawT/galTiltT）
     galaxyGroup.rotation.order = "YXZ";
@@ -4549,12 +4794,27 @@ export function Globe({
       lineMat: THREE.LineDashedMaterial;
       marker: THREE.Sprite;
       markerMat: THREE.SpriteMaterial;
+      pulse: THREE.Sprite;
+      pulseMat: THREE.SpriteMaterial;
       label: THREE.Sprite;
       labelMat: THREE.SpriteMaterial;
     } | null = null;
     /** 罗盘最近一帧读数（验收钩子用）：臂长 px 与屏幕系方
-     * 向（初值正上 = 退化相位兜底方向） */
-    const galCompassState = { lenPx: 0, sdx: 0, sdy: -1 };
+     * 向（初值正上 = 退化相位兜底方向）；mk/lb = 标记/名签
+     * 最近一帧的画布相对 px 中心（点按热区判定与探针共用同
+     * 一份落位，未落位时恒 −1） */
+    const galCompassState = {
+      lenPx: 0,
+      sdx: 0,
+      sdy: -1,
+      mkPxX: -1,
+      mkPxY: -1,
+      lbPxX: -1,
+      lbPxY: -1,
+    };
+    /** 「太阳系」签精灵（构建时登记）：邻域点按热区按它的实
+     * 际世界位投影判定，不靠估位 */
+    let galSunLabel: THREE.Sprite | null = null;
     /** 邻域轨道朝向的欧拉合成（本轮拖动模型）：恒 YXZ、z 分
      * 量构造上恒 0——方位角（Y）× 极角（X）两角成像、无 roll
      * 通道，帧段每帧由此写组四元数（见帧段轨道段） */
@@ -4563,6 +4823,13 @@ export function Globe({
     const galWarpV = new THREE.Vector3();
     /** 逐帧统一淡变的材质登记（base = 满显透明度） */
     const galFadeMats: Array<{
+      mat: THREE.Material & { opacity: number };
+      base: number;
+    }> = [];
+    /** 连续光场层（银河视觉重构轮）：盘面/旋臂辉光底片与尘带
+     * 暗幕只属于全览读法——帧段在 galFade 基础上再乘 (1−eNC)，
+     * 邻域落定时恒隐，免大号柔边点在太阳近旁糊成雾/暗斑 */
+    const galHazeMats: Array<{
       mat: THREE.Material & { opacity: number };
       base: number;
     }> = [];
@@ -4613,12 +4880,20 @@ export function Globe({
     // 拖动模型（本轮定版，用户：「拖动时不需要加 Z 轴的变化 /
     // 就和太阳系一样就行」）：与太阳系聚焦环视同一套球面轨
     // 道模型——状态只有两个角：galYaw = 方位角（横拖专属）、
-    // galTilt = 极角（盘面法线对 +Y 的倾角，纵拖专属，入场值
-    // 0.62 即入场极角）；朝向每帧由 galOrbitEuler（YXZ、z 恒
+    // galTilt = 极角（盘面倾角，落定值 GAL_FULL_TILT；
+    // 邻域入场时由 galEntryPol 改写为恒 +0.62）；朝向每帧由 galOrbitEuler（YXZ、z 恒
     // 0）合成四元数，roll 通道在构造上不存在（全仓无第三个
     // 角的写入者，验收钩子 orbit() 逐帧可读 roll ≡ 0）；惯性
     // galVelY 只推方位角、沿同一模型衰减。横拖绝不碰极角、
     // 纵拖绝不碰方位角，两路在 onMove 里分开写入（见手势段）。
+    // —— 邻域纯方位角拖动（2026-11-15 晚，用户：「领域可以
+    // 和太阳系和银河系一样只左右旋转嘛，不要加上下」）：邻
+    // 域内纵拖不再进视角——pitch 通道（增益 0.003、夹取
+    // [0.15, 1.35]）在邻域层级整体停用，极角自入场边沿落定
+    // 后恒等于入场极角，邻域内任何手势路径都不再写
+    // galTiltT（拖动两路只写 galYawT 与 galVelY；点太阳系标
+    // 记回正写的仍是入场极角本身，与此口径同值）。纵拖改极
+    // 角只剩银河全览一路（指针路、全览夹取 [0.18, 1.25]）。
     // galYaw：邻域里绕太阳的环视偏航（目标/当前一对，帧段阻尼趋
     // 近；只在邻域混合在位时施加到组旋转，全览恒 0）；galTilt：
     // 盘面倾角（全览鼠标纵拖与邻域环视纵拖共用同一目标，帧段统
@@ -4628,8 +4903,8 @@ export function Globe({
     // 相机距与组缩放同比抵消，捏合在邻域里视觉上是空操作）
     let galYawT = 0;
     let galYaw = 0;
-    let galTiltT = 0.62;
-    let galTilt = 0.62;
+    let galTiltT = GAL_FULL_TILT;
+    let galTilt = GAL_FULL_TILT;
     // 邻域默认倍率 11（2026-11-14 邻域优化轮，用户：「星球不要
     // 挨着太近」）：基准拟合 ±1.1 kpc 经倍率 11 收紧为 ±100 pc
     // ——默认取景约 200 pc 见方，内圈四星与角宿一在真实位置上
@@ -4639,6 +4914,10 @@ export function Globe({
     let galaxyNearZoom = 11;
     /** 邻域入场边沿检测（全览→邻域切换的那一帧触发入场朝向） */
     let galPrevNearGoal = 0;
+    /** 入场相位拨正目标（旋转轴对齐轮）：入场边沿按
+     * galEntryPhase 置位，帧段自转驱动把它阻尼拨到该相位
+     * 后清零；null = 无拨正进行中（自转走常速慢转） */
+    let galSpinEntryTarget: number | null = null;
     /**
      * 入场朝向解算（邻域优化轮，用户：「切换到领域时视角朝向
      * 最好对着黑洞」）：太阳→银心方向（自转系里 = −galSunBase）
@@ -4660,25 +4939,47 @@ export function Globe({
       return Math.PI - Math.atan2(d.x, d.z);
     };
     /**
-     * 入场极角（本轮追加，用户：「入场时银心方向在画面上
-     * 方」）：银心方向经入场朝向后的屏幕纵分量 ∝ −cos(spinA)·
-     * sin(极角)——极角恒 +0.62 时它随入场自转相位翻面（探针
-     * 实拍签在正下方正是 cos(spinA)>0 的相位）。入场极角按
-     * 相位选符号（|极角| 恒 0.62、构图倾角不变）：cos>0 取
-     * −0.62、cos<0 取 +0.62，纵分量恒 ≥ 0（指向上方；cos≈0
-     * 的退化相位下银心恰在正前方、罗盘走正上兜底）。求解器
-     * （galLabelCtx）与帧段入场边沿共用此式；退出邻域时极
-     * 角目标复位 +0.62（全览口径不变）
+     * 入场极角恒正（2026-11-16 旋转轴对齐轮，用户真机判
+     * 「领域里面旋转的轴和太阳系、银河系不一样，总是上下
+     * 颠倒」）。【三层旋转约定对比·诊断结论】方位角增益三
+     * 处同号（太阳系 +0.005 / 银河全览 +0.0045 / 邻域
+     * +0.005 rad/px）、旋转轴同为 +Y 右手系、相机 up 同为
+     * +Y——唯一分岔在极角符号：太阳系总览 rotation.x =
+     * +0.55、聚焦 pitch 常态为正，银河全览 galTilt 夹取
+     * [0.18, 1.25] 落定 +0.61，极角恒正（相机恒在盘面上
+     * 方）；旧入场极角按自转相位选 ±0.62，cos(spinA)>0 的
+     * 一半入场取 −0.62——相机钻到盘面下方，世界上下镜像、
+     * 方位视觉反向，正是「上下颠倒」的来源。【修法】极角
+     * 恒 +0.62（与全览 +0.61 同族同号）；「银心在太阳上
+     * 方」的构图改由方位角选取实现（galEntryPhase 选自转
+     * 相位分支），不许再靠翻极角符号凑。银心方向屏幕纵分
+     * 量 ∝ −cos(spinA)·sin(极角)：极角恒正时须 cos(spinA)
+     * ≤ −0.2 纵分量才恒为上——相位选取保此分支（见
+     * galEntryPhase）。求解器（galLabelCtx）与帧段入场边
+     * 沿共用本式；退出邻域时极角目标复位 GAL_FULL_TILT
      */
-    const galEntryPol = (spinA: number): number =>
-      Math.cos(spinA) > 0 ? -0.62 : 0.62;
-    /** 邻域纵拖极角夹取（本轮）：跟随当前极角符号的同侧夹
-     * 取（|极角| ∈ [0.15, 1.35]）——入场极角可为负，旧正侧
-     * 夹取会在首次纵拖把极角硬掰回正侧、入场朝向当场翻面 */
-    const galNearPolClamp = (v: number): number => {
-      const s = galTiltT < 0 ? -1 : 1;
-      return s * THREE.MathUtils.clamp(Math.abs(v), 0.15, 1.35);
+    const GAL_NEAR_POL = 0.62;
+    const galEntryPol = (_spinA: number): number => GAL_NEAR_POL;
+    /**
+     * 入场方位角选取（同轮）：入场自转相位——当前相位已在
+     * cos ≤ −0.2 分支（银心在上方且余量足）则原样用；否则
+     * 取「相位 ≡ π（cos = −1、银心纵分量最大）」的最短角
+     * 距修正值。帧段入场边沿把自转角阻尼拨到此相位（转场
+     * 飞行里盘面顺转一段，落定即所需构图），求解器与回正
+     * 解算按同一相位口径。方位角（绕 +Y）本身改不了纵分
+     * 量——能选的是自转相位这个方位角，故名
+     */
+    const galEntryPhase = (spinA: number): number => {
+      if (Math.cos(spinA) <= -0.2) return spinA;
+      let d = (Math.PI - spinA) % (Math.PI * 2);
+      if (d > Math.PI) d -= Math.PI * 2;
+      if (d < -Math.PI) d += Math.PI * 2;
+      return spinA + d;
     };
+    // 邻域纵拖极角夹取 galNearPolClamp 已随 pitch 通道停用
+    // 一并退役（2026-11-15 晚纯方位角轮）：邻域内再无极角写
+    // 入者需要它；其「入场负极角不许被夹回正侧」的教训由入
+    // 场极角恒定口径直接消解（见上方拖动模型条）。
     /** 星名签登记表（构建时回填）：入场边沿按当次自转相位
      * 重算偏移后逐签写回 fanX/fanY（锚定）与 fanCX/fanCY（呼出） */
     const galStarLabelRefs: Array<{ name: string; a: GalAnchor }> = [];
@@ -4746,7 +5047,7 @@ export function Globe({
       Ri: GalM3;
       sunSpin: GalV3;
       sunPx: [number, number];
-      /** 入场极角（galEntryPol，按相位 ±0.62）：夹取复刻的
+      /** 入场极角（galEntryPol，恒 +0.62）：夹取复刻的
        * sin/cos 须与帧段落定极角同值同符号 */
       pol: number;
     }
@@ -5318,6 +5619,15 @@ export function Globe({
     // 引力井）材质登记，帧段按 galFade × eNC 淡入——只在邻
     // 域档出现，全览恒隐
     const galTimeUniform = { value: 0 };
+    // 粒子游移时钟（2026-11-16「活银河」轮，用户改口径：
+    // 不走轨道，只在本位附近随机游移；当晚返工轮调强——
+    // 幅度/频率/呼吸振幅全面上调到真机肉眼可辨，见 mkPoints
+    // 头注）：全银河点层共享——帧段按 (1−eNC) 推进（邻域
+    // 渐冻、校准层恒静），逐粒子在顶点着色器里以自家相位
+    // 做三轴 Lissajous 漂移（mkPoints 头注），CPU 每帧只
+    // 写这一个值
+    const galOrbitUniform = { value: 0 };
+    let galOrbitClock = 0;
     const galPointScale = { value: 800 };
     const galNearMats: Array<{
       mat: THREE.Material & { opacity: number };
@@ -5325,7 +5635,8 @@ export function Globe({
     }> = [];
     let smoothGalaxyZ = 22;
     const buildGalaxy = async (): Promise<void> => {
-      // 分片构建（调度安全网）：约 4.5–7.5 万星点的生成按时间
+      // 分片构建（调度安全网）：约 4.3 万（移动）–8 万（桌面）
+      // 星点的生成按时间
       // 预算切片让行（fillDisc 循环内检查点 + 逐臂检查点），构
       // 建在银河过渡的 2.6 秒里分片完成、不再是一整块长任务；
       // galaxyBuilt 只在全部构建完成时才置真——帧段对银河结构
@@ -5368,6 +5679,28 @@ export function Globe({
         tex.colorSpace = THREE.SRGBColorSpace;
         return tex;
       })();
+      // 连续光场专用纹理（银河视觉重构轮）：比星点辉光更宽更
+      // 平的缓降——峰值压低、肩部抬高，大号点彼此叠绘时融成
+      // 连续光带而不是一颗颗圆斑（多尺度辉光叠绘近似 bloom：
+      // 本页无后期辉光通道，连续感全靠这层 + 臂/盘两级大点
+      // 层的加色累积）。尘带暗幕共用同一张（宽肩 = 软边吸收）
+      const galHazeTex = (() => {
+        const c = document.createElement("canvas");
+        c.width = 128;
+        c.height = 128;
+        const g = c.getContext("2d")!;
+        const grad = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+        grad.addColorStop(0, "rgba(255,255,255,0.50)");
+        grad.addColorStop(0.3, "rgba(255,255,255,0.34)");
+        grad.addColorStop(0.55, "rgba(255,255,255,0.18)");
+        grad.addColorStop(0.8, "rgba(255,255,255,0.06)");
+        grad.addColorStop(1, "rgba(255,255,255,0)");
+        g.fillStyle = grad;
+        g.fillRect(0, 0, 128, 128);
+        const tex = new THREE.CanvasTexture(c);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        return tex;
+      })();
       const L = (xKpc: number, yKpc: number, zKpc = 0): THREE.Vector3 =>
         new THREE.Vector3(xKpc * GAL_S, zKpc * GAL_S, -yKpc * GAL_S);
       const tmpC = new THREE.Color();
@@ -5381,8 +5714,12 @@ export function Globe({
       // 1 − aAmp·(0.5+0.5·sin) 把 88% 的星压在 [0.82, 1.0]
       // （±9% 调制），在手机小屏 + 加色叠亮下低于感知阈值）：
       // 新式 vB = uCenter + aAmp·sin(t·freq+phase)，uCenter=
-      // 0.87、aAmp 为半幅——约 20% 的星半幅 0.24–0.28（亮度
-      // 约 0.59–1.15、肉眼可辨），其余 0.12–0.20；时间均值由
+      // 0.87、aAmp 为半幅——约 20% 的星半幅 0.34–0.40（亮度
+      // 约 0.47–1.27、一眼可感），其余 0.18–0.26（2026-11-16
+      // 活银河返工轮再上调：上一档 0.24–0.28 / 0.12–0.20 在
+      // 真机上仍被判「看不到」，本档半幅约 ±30–46% 调制；时
+      // 间均值恒为 uCenter 0.87、与振幅无关，亮度预算不
+      // 变）；时间均值由
       // 旧式约 0.92 降到 0.87，图层不透明度统一 ×1.06 补偿回
       // 旧均值（亮度预算守恒，只写进 galFadeMats 的 base）；
       // breatheAmp 是层级总闸（尘带 0 且其 uCenter=1.0 恒定、
@@ -5399,6 +5736,9 @@ export function Globe({
         blending: THREE.Blending,
         vertexColors: boolean,
         breatheAmp = 1,
+        tex: THREE.Texture | null = null,
+        hazeFade = false,
+        order = 0,
       ): {
         pos: Float32Array;
         col: Float32Array | null;
@@ -5410,11 +5750,31 @@ export function Globe({
         const phase = new Float32Array(n);
         const freq = new Float32Array(n);
         const amp = new Float32Array(n);
+        // 游移向量（2026-11-16「活银河」轮立、当晚返工轮调
+        // 强——元灿真机判「全是静止的」）：逐粒子随机方向 ×
+        // 层级幅度——星点层 0.14 wu（≈0.28 kpc，仍在臂宽 1σ
+        // ≈0.36 kpc 内、不脱臂）、大号软云层（点径 ≥1.4 的
+        // 雾团/辉光/剪影）0.30 wu（云体本就弥散，游移读作云
+        // 气翻动）；顶点着色器以自家相位派生三轴频率与相
+        // 位、周期 6–20 秒多档错开地漂移（Lissajous 小域游
+        // 走，恒在本位附近、不成轨道——元灿改口径：不要轨
+        // 道运动，要整体活气）。返工诊断：旧口径（星点层
+        // 0.045 wu、周期 48–68 秒）通路无冻结（uOrbit 时钟
+        // 逐帧推进、邻域外不门控），纯量级问题——手机全览
+        // 约 50 px/wu 下旧游移幅约 2 px、5 秒位移不足 1 px，
+        // 低于肉眼阈值；新口径星点层幅约 7 px、典型 5 秒位
+        // 移 5–9 px，软云层幅约 15 px
+        const driftAmp = size >= 1.4 ? 0.3 : 0.14;
+        const drift = new Float32Array(n * 3);
         for (let i = 0; i < n; i++) {
           phase[i] = rand() * Math.PI * 2;
           freq[i] = (Math.PI * 2) / (2.5 + rand() * 3.5);
           amp[i] =
-            breatheAmp * (rand() < 0.2 ? 0.24 + rand() * 0.04 : 0.12 + rand() * 0.08);
+            breatheAmp * (rand() < 0.2 ? 0.34 + rand() * 0.06 : 0.18 + rand() * 0.08);
+          const dMag = driftAmp * (0.35 + rand() * 0.65);
+          drift[i * 3] = gauss() * dMag;
+          drift[i * 3 + 1] = gauss() * dMag * 0.7;
+          drift[i * 3 + 2] = gauss() * dMag;
         }
         const geo = new THREE.BufferGeometry();
         geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
@@ -5423,13 +5783,15 @@ export function Globe({
         geo.setAttribute("aPhase", new THREE.BufferAttribute(phase, 1));
         geo.setAttribute("aFreq", new THREE.BufferAttribute(freq, 1));
         geo.setAttribute("aAmp", new THREE.BufferAttribute(amp, 1));
+        geo.setAttribute("aDrift", new THREE.BufferAttribute(drift, 3));
         const mat = new THREE.ShaderMaterial({
           uniforms: {
             uTime: galTimeUniform,
+            uOrbit: galOrbitUniform,
             uPointScale: galPointScale,
             uSize: { value: size },
             uOpacity: { value: opacity },
-            uMap: { value: galGlowTex },
+            uMap: { value: tex ?? galGlowTex },
             uColor: { value: new THREE.Color(0xffffff) },
             // 呼吸中心：参与呼吸的层 0.87（均值补偿见头注），
             // 不参与的层（尘带 breatheAmp=0、aAmp 恒 0）取 1.0
@@ -5439,7 +5801,9 @@ export function Globe({
             "attribute float aPhase;",
             "attribute float aFreq;",
             "attribute float aAmp;",
+            "attribute vec3 aDrift;",
             "uniform float uTime;",
+            "uniform float uOrbit;",
             "uniform float uPointScale;",
             "uniform float uSize;",
             "uniform float uCenter;",
@@ -5453,7 +5817,21 @@ export function Globe({
             "    vColor = uColor;",
             "  #endif",
             "  vB = uCenter + aAmp * sin(uTime * aFreq + aPhase);",
-            "  vec4 mv = modelViewMatrix * vec4(position, 1.0);",
+            // 游移（活银河轮立、返工轮调强）：三轴角频率逐
+            // 粒子由自家相位派生（fract 散列到 0.34–1.02
+            // rad/s、周期约 6–20 秒、多档错开）× 非整数倍派
+            // 生相位——逐粒子路径与节拍互不相同、不同步、
+            // 不成整齐机械感；位移恒被 aDrift 幅度封顶在本
+            // 位附近（旧式全员同频 0.131/0.093/0.107、周期
+            // 48–68 秒，真机不可见，已作废）
+            "  float dw1 = mix(0.34, 1.02, fract(aPhase * 0.61803));",
+            "  float dw2 = mix(0.34, 1.02, fract(aPhase * 1.31370));",
+            "  float dw3 = mix(0.34, 1.02, fract(aPhase * 2.11703));",
+            "  vec3 dp = position + aDrift * vec3(",
+            "    sin(uOrbit * dw1 + aPhase * 3.17),",
+            "    sin(uOrbit * dw2 + aPhase * 5.29),",
+            "    sin(uOrbit * dw3 + aPhase * 7.73));",
+            "  vec4 mv = modelViewMatrix * vec4(dp, 1.0);",
             "  gl_PointSize = clamp(uSize * uPointScale / max(0.05, -mv.z), 0.0, 300.0);",
             "  gl_Position = projectionMatrix * mv;",
             "}",
@@ -5475,11 +5853,17 @@ export function Globe({
         });
         const points = new THREE.Points(geo, mat);
         points.frustumCulled = false;
+        // 绘制序（银河视觉重构轮）：尘带两层 order=1 恒在一切
+        // 加色层（默认 0，含登记在后的核球/星晕/辉光精灵）之
+        // 后落笔——吸收必须压在已累积的光之上才成立，旧版靠
+        // 插入顺序、核球与辉光在其后又把内臂尘缝冲淡
+        points.renderOrder = order;
         galaxySpin.add(points);
         // 呼吸均值补偿：新式时间均值 0.87 vs 旧式约 0.92，参与
         // 呼吸的层 base ×1.06 补回（0.87×1.06≈0.92）；尘带
-        // （breatheAmp=0、因子恒 1.0）不补
-        galFadeMats.push({
+        // （breatheAmp=0、因子恒 1.0）不补。hazeFade 层改登记
+        // galHazeMats（帧段再乘 (1−eNC)，邻域恒隐）
+        (hazeFade ? galHazeMats : galFadeMats).push({
           mat,
           base: opacity * (breatheAmp > 0 ? 1.06 : 1),
         });
@@ -5517,30 +5901,31 @@ export function Globe({
       // —— 平滑盘面：指数盘（标长 3 kpc——论文 §3.2 的盘权重同值）
       // 截断 15 kpc；颜色由内暖金渐变到外蓝白，亮度随机压暗出颗粒
       {
-        // 立体重构轮：点数自旧 23,000/13,000 调剂到 24,500/
-        // 12,800——多出的桌面点数主要补回下文删掉的平面辉光盘
-        // （拿贴图冒充体积的那层）的亮度份额，改由真点体积承
-        // 担；移动端省下的点给恒星晕与球状星团。主体/亮点两层
-        // 拆分（5%）沿用精致轮口径。主体不透明度 0.62→0.68 同
-        // 为辉光盘下线的补偿——总亮度不升反稳（呼吸因子恒 ≤1）
-        const n = isCoarse ? 12800 : 24500;
+        // 点数沿革：23,000/13,000 → 立体重构轮 24,500/12,800
+        // → 本轮（2026-11-15 质感纠正轮·市面参考简报：「粒子
+        // 效果一定要足，粒子是本体不是装饰；不许再以性能为
+        // 由悄悄削粒子量」）34,000/16,000。主体/亮点两层拆分
+        // （5%）沿用。主体点径 0.085→0.10、不透明度 0.68→
+        // 0.78，亮点 0.145→0.17 / 0.8→0.88——旧帧里盘面外区
+        // 近乎空黑、臂间无填充，正是「CD」感的主因之一；本
+        // 轮靠点数＋点径＋亮度分布（见 fillDisc 内 b 式）把
+        // 盘面铺实，径向指数密度律不变（中心压倒性亮、边缘
+        // 渐隐的梯度由采样律本身给出，不动几何）
+        const n = isCoarse ? 16000 : 34000;
         const brightN = Math.round(n * 0.05);
         const bodySet = mkPoints(
-          n - brightN, 0.085, 0.68, THREE.AdditiveBlending, true,
+          n - brightN, 0.1, 0.78, THREE.AdditiveBlending, true,
         );
         const brightSet = mkPoints(
-          brightN, 0.145, 0.8, THREE.AdditiveBlending, true,
+          brightN, 0.17, 0.88, THREE.AdditiveBlending, true,
         );
-        // 盘面配色（立体重构轮定版、真机修正轮加深）：内圈
-        // 饱和金 → 外圈淡麦秆色（盘面大众脸是暖白到鹅黄，不
-        // 再渐到蓝——蓝白留给旋臂的年轻星）；旧版内外两端皆
-        // 是低饱和暖白（#f0dfae→#ddd09e），与旋臂的浅蓝在加
-        // 色叠亮下一起泛白、真机上读不出色差——本轮内圈金
-        // 饱和拉开（#f2cf8e），与核球金、旋臂蓝三方一眼可分；
-        // 逐星再叠色系内抖动与少量邻色人口（约 6% 偏蓝白、
-        // 约 5% 偏橙）
-        const cIn = new THREE.Color("#f2cf8e");
-        const cOut = new THREE.Color("#d9cf9f");
+        // 盘面配色：内圈饱和金 → 外圈麦秆色（盘面大众脸是暖
+        // 白到鹅黄，蓝白留给旋臂的年轻星）；本轮内圈金再加
+        // 深（#f2cf8e→#f5c877），与核球金、旋臂蓝三方一眼可
+        // 分；逐星再叠色系内抖动与少量邻色人口（约 6% 偏蓝
+        // 白、约 5% 偏橙）
+        const cIn = new THREE.Color("#f5c877");
+        const cOut = new THREE.Color("#d8c491");
         const fillDisc = async (
           set: { pos: Float32Array; col: Float32Array | null; done: () => void },
           count: number,
@@ -5561,12 +5946,18 @@ export function Globe({
             // 暖、年老星族）；指数律的长尾让盘面上下自然散开
             // 少数高 z 星，斜视时纵深立刻可读。每颗星的 z 只
             // 由它所属成分决定，不许整层共用一个高度
+            // 【z 拉伸轮（2026-11-15 晚，23:50 幅度再放
+            // 开）】抽样标高：薄成分 ×8（0.30→2.40 kpc）、
+            // 厚成分 ×3.5（0.95→3.33，等效盘厚合计 ×6.3）：
+            // 发表量级只作两成分的配比与形状来源，纵向比例
+            // 自本轮起是表现层口径、非真实标高（元灿亲令，
+            // 见 GAL_Z_STRETCH 注）
             const thick = rand() < 0.16;
             put(
               set.pos, i,
               rKpc * Math.sin(beta),
               rKpc * Math.cos(beta),
-              laplace(thick ? 0.95 : 0.3),
+              laplace(thick ? 0.95 * GAL_Z_THICK : 0.3 * GAL_Z_STRETCH),
             );
             tmpC.copy(cIn).lerp(cOut, Math.min(1, rKpc / 13));
             if (thick) tmpC.lerp(cIn, 0.4);
@@ -5574,9 +5965,20 @@ export function Globe({
             if (acc < 0.06) tmpC.lerp(new THREE.Color(0.62, 0.76, 1.0), 0.55);
             else if (acc < 0.11)
               tmpC.lerp(new THREE.Color(1.0, 0.5, 0.24), 0.45);
-            const b = bright
-              ? 0.85 + 0.3 * rand()
-              : 0.3 + 0.7 * Math.pow(rand(), 2.2);
+            // 亮度分布（质感纠正轮）：旧式 0.3+0.7·u^2.2 中位
+            // 仅约 0.44，半数盘星压在暗端、外盘读成空黑；新式
+            // 0.42+0.58·u^1.6 中位约 0.61，盘面整体抬亮但峰值
+            // 不变（仍 ≤1.0），中心靠密度梯度保持压倒性。
+            // 视觉重构轮再乘径向收束 radK（0.45+0.55·e^(−r/6))：
+            // 旧版逐星亮度与半径无关、只有密度在衰减，渲染出
+            // 的面亮度梯度被点径/钳制吃平——本轮让单星亮度也
+            // 随半径指数衰减，面亮度向核心强收束（Gaia 全天
+            // 图的中心压倒性亮度即密度×亮度双梯度）
+            const radK = 0.45 + 0.55 * Math.exp(-rKpc / 6);
+            const b =
+              (bright
+                ? 0.85 + 0.3 * rand()
+                : 0.42 + 0.58 * Math.pow(rand(), 1.6)) * radK;
             if (set.col)
               putC(set.col, i, jit(tmpC.r * b), jit(tmpC.g * b), jit(tmpC.b * b));
           }
@@ -5584,7 +5986,119 @@ export function Globe({
         };
         await fillDisc(bodySet, n - brightN, false);
         await fillDisc(brightSet, brightN, true);
+        // —— 盘面连续底光（银河视觉重构轮·画法一）：与星点同
+        // 分布（指数盘、双成分 z）的宽肩大点低透明叠绘——星
+        // 点是颗粒，这层是把颗粒融成连续光场的几何「底片」
+        // （100,000 Stars 后期以照片盘面垫底、Gaia 以密度场
+        // 成像的同一原理；本页无贴图/后期通道，用多尺度辉光
+        // 点层近似 bloom）。逐点亮度带强径向收束
+        // (0.25+0.75·e^(−r/4.2))：内盘成面、外盘渐隐。登记
+        // galHazeMats——邻域落定时淡出，不糊太阳近旁
+        {
+          const hn = isCoarse ? 1500 : 2600;
+          const haze = mkPoints(
+            hn, 1.6, 0.03, THREE.AdditiveBlending, true, 1,
+            galHazeTex, true,
+          );
+          for (let i = 0; i < hn; i++) {
+            if ((i & 2047) === 0) await sl.tick();
+            const u = rand();
+            const rKpc =
+              -3 * Math.log(1 - u * (1 - Math.exp(-15 / 3)));
+            const beta = rand() * Math.PI * 2;
+            const thick = rand() < 0.16;
+            put(
+              haze.pos, i,
+              rKpc * Math.sin(beta),
+              rKpc * Math.cos(beta),
+              laplace(thick ? 0.95 * GAL_Z_THICK : 0.3 * GAL_Z_STRETCH),
+            );
+            tmpC.copy(cIn).lerp(cOut, Math.min(1, rKpc / 13));
+            if (thick) tmpC.lerp(cIn, 0.4);
+            const b =
+              (0.25 + 0.75 * Math.exp(-rKpc / 4.2)) *
+              (0.7 + 0.3 * rand());
+            if (haze.col)
+              putC(haze.col, i, jit(tmpC.r * b), jit(tmpC.g * b), jit(tmpC.b * b));
+          }
+          haze.done();
+        }
+        // —— 盘面细尘粒（2026-11-15 晚·粒子加厚轮）：与盘
+        // 面主体同分布（指数盘 + 双成分 z ×拉伸）的细粒层
+        // （点径 0.05）——盘面颗粒自此三档：主体 0.10 / 亮
+        // 点 0.17 / 细尘 0.05，臂间与外盘的空黑被细尘填
+        // 实；亮度压在主体之下（(0.30+0.40·u) × radK），
+        // 只补质感密度、不动盘面亮度梯度
+        {
+          const fn = isCoarse ? 3000 : 6000;
+          const fine = mkPoints(
+            fn, 0.05, 0.5, THREE.AdditiveBlending, true,
+          );
+          for (let i = 0; i < fn; i++) {
+            if ((i & 2047) === 0) await sl.tick();
+            const u = rand();
+            const rKpc =
+              -3 * Math.log(1 - u * (1 - Math.exp(-15 / 3)));
+            const beta = rand() * Math.PI * 2;
+            const thick = rand() < 0.16;
+            put(
+              fine.pos, i,
+              rKpc * Math.sin(beta),
+              rKpc * Math.cos(beta),
+              laplace(thick ? 0.95 * GAL_Z_THICK : 0.3 * GAL_Z_STRETCH),
+            );
+            tmpC.copy(cIn).lerp(cOut, Math.min(1, rKpc / 13));
+            if (thick) tmpC.lerp(cIn, 0.4);
+            const radK = 0.45 + 0.55 * Math.exp(-rKpc / 6);
+            const b = (0.3 + 0.4 * rand()) * radK;
+            if (fine.col)
+              putC(fine.col, i, jit(tmpC.r * b), jit(tmpC.g * b), jit(tmpC.b * b));
+          }
+          fine.done();
+        }
       }
+      // —— 逐臂色板（2026-11-16 色系重做轮，用户判现行色
+      // 系「太难看了」）——【废止】旧口径按半径一刀切洗色
+      // （气体盘面 gasCol：内暖金→中青蓝→外深蓝；雾团按半
+      // 径在青蓝/蓝/暖间走）：青蓝大面积洗与深蓝外圈读着
+      // 廉价、且各臂无色彩身份。【新口径】色按臂设计，向
+      // M31/M51/M33 天体摄影看齐：七臂同属一个家族——蓝白
+      // 年轻星为臂的主光、粉色电离氢只作点缀（hii = 本臂
+      // 粉点缀密度倍率）、暖白人口占比 warm 微调臂的年龄
+      // 感；臂间与内盘的暖香槟底色由盘面层承担（cIn/cOut
+      // 不动）、尘带暖棕剪影不动。臂间差异刻意微妙（同系
+      // 内的色温/纯度偏移，不是彩虹臂）：矩尺最深蓝（内
+      // 盘大质量年轻星）、船底青蓝偏绿（船底座大星云的
+      // 气质）、人马最暖且粉点缀最密（银心方向的丰富星
+      // 场）、本地中性蓝白（太阳所在臂）、英仙清亮蓝白、
+      // 外臂最淡（稀疏外围）、半人马钢蓝（推断臂另有整臂
+      // 压暗）。body = 主体星色、bright = 亮结色（RGB 倍
+      // 率，与逐星亮度 b 相乘）；气体盘面/雾团/光带/细尘
+      // 各层一律从本表取色，不许新旧两套色混杂
+      const ARM_PALETTE: Record<
+        string,
+        {
+          body: [number, number, number];
+          bright: [number, number, number];
+          warm: number;
+          hii: number;
+        }
+      > = {
+        Norma: { body: [0.47, 0.64, 1.0], bright: [0.55, 0.73, 1.0], warm: 0.08, hii: 1.0 },
+        Centaurus: { body: [0.52, 0.66, 0.96], bright: [0.6, 0.74, 0.99], warm: 0.1, hii: 0.7 },
+        Sagittarius: { body: [0.55, 0.7, 1.0], bright: [0.64, 0.78, 1.0], warm: 0.18, hii: 1.35 },
+        Carina: { body: [0.49, 0.72, 1.0], bright: [0.57, 0.8, 1.0], warm: 0.1, hii: 1.2 },
+        Local: { body: [0.56, 0.71, 1.0], bright: [0.63, 0.77, 1.0], warm: 0.14, hii: 1.0 },
+        Perseus: { body: [0.48, 0.68, 1.0], bright: [0.56, 0.75, 1.0], warm: 0.09, hii: 1.1 },
+        Outer: { body: [0.54, 0.69, 0.97], bright: [0.61, 0.75, 0.99], warm: 0.08, hii: 0.8 },
+      };
+      const armPal = (arm: (typeof GALAXY_ARMS)[number]) =>
+        ARM_PALETTE[arm.en] ?? {
+          body: [0.52, 0.7, 1.0] as [number, number, number],
+          bright: [0.58, 0.75, 1.0] as [number, number, number],
+          warm: 0.1,
+          hii: 1,
+        };
       // —— 旋臂点云：沿式 (2) 中心线采样，径向按论文臂宽高斯散布；
       // 推断段（矩尺外延/船底四象限/半人马全臂）同臂同对象、逐点
       // 压暗 + 降密——与论文图 5 的虚线推断同一诚实口径
@@ -5595,20 +6109,26 @@ export function Globe({
         // 分片让行：逐臂查一次时间预算（单臂填充约 4.5 千点，
         // 臂间必有让行机会）
         await sl.tick();
+        const pal = armPal(arm);
+        // 点数（质感纠正轮·粒子量硬指令）：主段 3,400→4,600
+        // （移动 2,000→2,600）、外延 1,100→1,400（移动 650→
+        // 800）；推断段 ×0.55 降密口径不变
         const mainN = Math.round(
-          (isCoarse ? 2000 : 3400) * (arm.inferred ? 0.55 : 1),
+          (isCoarse ? 2600 : 4600) * (arm.inferred ? 0.55 : 1),
         );
-        const extN = arm.extMinDeg != null ? (isCoarse ? 650 : 1100) : 0;
-        // 质感分层（2026-11-14 精致轮）：同臂总点数不变，拆
-        // 「主体（多而暗、亮度走陡分布）+ 亮结（主段约 6%、
-        // 点径近两倍、更亮）」两张点云，打破单层同径的均匀撒
-        // 盐感；推断段只进主体层——推断处不许有亮结（诚实口径）
+        const extN = arm.extMinDeg != null ? (isCoarse ? 800 : 1400) : 0;
+        // 质感分层：拆「主体（多而暗、亮度走陡分布）+ 亮结
+        // （主段约 6%、点径近两倍、更亮）」两张点云，打破单
+        // 层同径的均匀撒盐感；推断段只进主体层——推断处不
+        // 许有亮结（诚实口径）。本轮主体点径 0.09→0.105、不
+        // 透明度 0.78→0.85，亮结 0.165→0.19 / 0.9→0.95——
+        // 旧帧里臂是「一串稀点」而非光带，点径与密度同补
         const brightN = Math.round(mainN * 0.06);
         const bodySet = mkPoints(
-          mainN + extN - brightN, 0.09, 0.78, THREE.AdditiveBlending, true,
+          mainN + extN - brightN, 0.105, 0.85, THREE.AdditiveBlending, true,
         );
         const brightSet = mkPoints(
-          brightN, 0.165, 0.9, THREE.AdditiveBlending, true,
+          brightN, 0.19, 0.95, THREE.AdditiveBlending, true,
         );
         const dim = arm.inferred ? 0.5 : 1;
         const fillInto = (
@@ -5630,25 +6150,33 @@ export function Globe({
             // 旋臂竖直散布贴盘面（年轻天体本就贴平面）：逐星
             // 独立 Laplace z、标高 0.06 kpc（年轻盘量级）——有
             // 厚度但不离面，与盘面/厚盘的标高分层拉开
-            put(set.pos, i, c.x + rx * sr, c.y + ry * sr, laplace(0.06));
-            // 臂色按温度（真机修正轮加深）：主体明确偏蓝
-            // （0.58, 0.75, 1.0——旧版 0.72/0.82/1.0 太浅、叠
-            // 亮泛白）、暖白人口两成降到约一成二；亮结层另掺
-            // 约 3.5% 橙红（红超巨星点缀——旋臂里真实存在的
-            // 亮橙红点）；逐通道抖动出近亲色差
-            const warm = rand() < 0.12;
+            put(set.pos, i, c.x + rx * sr, c.y + ry * sr, laplace(0.06 * GAL_Z_STRETCH));
+            // 臂色（色系重做轮）：逐臂色板 pal——主体/亮结
+            // 取本臂蓝白（见 ARM_PALETTE 注，同系内的微妙差
+            // 异）；暖白人口占比按臂（pal.warm，人马最暖）；
+            // 亮结层另掺约 3.5% 橙红（红超巨星点缀）；逐通
+            // 道抖动出近亲色差。主体亮度分布同步
+            // 抬中位：0.34+0.66·u^1.8（中位约 0.55）→
+            // 0.45+0.55·u^1.5（中位约 0.64）
+            const warm = rand() < pal.warm;
             const giant = bright && rand() < 0.035;
+            // 径向收束（视觉重构轮，同盘面 radK 口径）：臂的
+            // 内段亮、外段渐暗——旧版臂亮度与半径无关，整条
+            // 臂一个亮度、读作等亮的珠串；收束后亮度结构与
+            // 盘面同向（向核心汇聚），外臂自然退后
+            const radK = 0.32 + 0.68 * Math.exp(-c.r / 5.2);
             const b =
               (bright
                 ? 0.82 + 0.33 * rand()
-                : 0.34 + 0.66 * Math.pow(rand(), 1.8)) *
+                : 0.45 + 0.55 * Math.pow(rand(), 1.5)) *
               shade *
-              dim;
+              dim *
+              radK;
             if (set.col) {
               if (giant) putC(set.col, i, jit(1.0 * b), jit(0.42 * b), jit(0.22 * b));
               else if (warm) putC(set.col, i, jit(0.92 * b), jit(0.85 * b), jit(0.7 * b));
-              else if (bright) putC(set.col, i, jit(0.62 * b), jit(0.78 * b), jit(1.0 * b));
-              else putC(set.col, i, jit(0.58 * b), jit(0.75 * b), jit(1.0 * b));
+              else if (bright) putC(set.col, i, jit(pal.bright[0] * b), jit(pal.bright[1] * b), jit(pal.bright[2] * b));
+              else putC(set.col, i, jit(pal.body[0] * b), jit(pal.body[1] * b), jit(pal.body[2] * b));
             }
           }
         };
@@ -5659,7 +6187,160 @@ export function Globe({
         }
         bodySet.done();
         brightSet.done();
-        const nCl = isCoarse ? 62 : 110;
+        // —— 旋臂光带（银河视觉重构轮·画法一，本轮核心）：同
+        // 中心线、同臂宽散布的两级宽肩辉光点——带芯级（点径
+        // 0.55、低透明）把主体星点的颗粒融成连续带，宽晕级
+        // （1.5、更低透明、深一号蓝）给带一条向外缓降的肩；
+        // 两级叠绘 + 星点在上 = 多尺度辉光近似 bloom（无后期
+        // 通道下的几何做法）。推断段只进带芯级且同主体口径
+        // 压暗（shade 0.42、整臂 dim），宽晕不进推断段——推
+        // 断处不许有宽光晕（诚实口径同亮结）。逐点亮度带同
+        // 式径向收束 radK；登记 galHazeMats，邻域恒隐
+        {
+          const fillHaze = (
+            set: { pos: Float32Array; col: Float32Array | null; done: () => void },
+            count: number,
+            bMin: number,
+            bMax: number,
+            shade: number,
+            cr: number,
+            cg: number,
+            cb: number,
+            scatterK = 1,
+          ): void => {
+            for (let k = 0; k < count; k++) {
+              const betaDeg = bMin + rand() * (bMax - bMin);
+              const c = armPlanPoint(arm, betaDeg);
+              const sr = gauss() * arm.widthKpc * scatterK;
+              put(
+                set.pos, k,
+                c.x + (c.x / c.r) * sr,
+                c.y + (c.y / c.r) * sr,
+                laplace(0.06 * GAL_Z_STRETCH),
+              );
+              const radK = 0.32 + 0.68 * Math.exp(-c.r / 5.2);
+              const b = (0.45 + 0.55 * rand()) * shade * dim * radK;
+              if (set.col)
+                putC(set.col, k, jit(cr * b), jit(cg * b), jit(cb * b));
+            }
+          };
+          const core1 = mkPoints(
+            Math.round((isCoarse ? 300 : 520) * (arm.inferred ? 0.55 : 1)) +
+              (arm.extMinDeg != null ? (isCoarse ? 170 : 300) : 0),
+            0.55, 0.16, THREE.AdditiveBlending, true, 1,
+            galGlowTex, true,
+          );
+          const mainHazeN = Math.round(
+            (isCoarse ? 300 : 520) * (arm.inferred ? 0.55 : 1),
+          );
+          fillHaze(core1, mainHazeN, arm.betaMinDeg, arm.betaMaxDeg, 1, pal.body[0], pal.body[1], pal.body[2]);
+          if (arm.extMinDeg != null) {
+            // 推断段续填同一层（索引接主体之后）：fillHaze 自
+            // 0 写起不适用，手动同式填尾段
+            const extHN = isCoarse ? 170 : 300;
+            for (let k = 0; k < extHN; k++) {
+              const i = mainHazeN + k;
+              const betaDeg =
+                arm.extMinDeg + rand() * (arm.betaMinDeg - arm.extMinDeg);
+              const c = armPlanPoint(arm, betaDeg);
+              const sr = gauss() * arm.widthKpc;
+              put(
+                core1.pos, i,
+                c.x + (c.x / c.r) * sr,
+                c.y + (c.y / c.r) * sr,
+                laplace(0.06 * GAL_Z_STRETCH),
+              );
+              const radK = 0.32 + 0.68 * Math.exp(-c.r / 5.2);
+              const b = (0.45 + 0.55 * rand()) * 0.42 * dim * radK;
+              if (core1.col)
+                putC(core1.col, i, jit(pal.body[0] * b), jit(pal.body[1] * b), jit(pal.body[2] * b));
+            }
+          }
+          core1.done();
+          if (!arm.inferred) {
+            const halo2 = mkPoints(
+              isCoarse ? 80 : 140, 1.5, 0.05, THREE.AdditiveBlending,
+              true, 1, galHazeTex, true,
+            );
+            fillHaze(
+              halo2, isCoarse ? 80 : 140,
+              arm.betaMinDeg, arm.betaMaxDeg, 1,
+              pal.body[0] * 0.82, pal.body[1] * 0.85, pal.body[2] * 0.98,
+            );
+            halo2.done();
+          }
+          // —— 臂脊亮芯 + 辉光裙（2026-11-15 晚·臂立体轮，
+          // 与 z 拉伸同轮）：体积感的光层分工再加两级——脊
+          // 芯级贴中心线窄散布（臂宽 ×0.38）、点径 0.30、
+          // 亮蓝白，把臂读出一条有脊的亮带芯；裙级散布
+          // ×1.9 溢出臂宽两侧、点径 2.6、极低透明深蓝，是
+          // 臂向两侧漫开的辉光裙。明暗层次自此为：脊芯
+          // （最亮）→ 带芯 → 星点颗粒 → 宽晕 → 裙（最
+          // 暗），尘带暗幕仍以 order=1 压在全部光层之后
+          // （遮挡关系不变）。脊芯随带芯同规：推断段 ×0.55
+          // 降密压暗、外延段不进（亮芯不许出现在推断/外延
+          // 处，同亮结诚实口径）；裙只进非推断段（同宽晕）
+          const ridge = mkPoints(
+            Math.round((isCoarse ? 240 : 420) * (arm.inferred ? 0.55 : 1)),
+            0.3, 0.2, THREE.AdditiveBlending, true, 1,
+            galGlowTex, true,
+          );
+          fillHaze(
+            ridge,
+            Math.round((isCoarse ? 240 : 420) * (arm.inferred ? 0.55 : 1)),
+            arm.betaMinDeg, arm.betaMaxDeg, 1,
+            Math.min(1, pal.bright[0] + 0.06), Math.min(1, pal.bright[1] + 0.04), pal.bright[2],
+            0.38,
+          );
+          ridge.done();
+          if (!arm.inferred) {
+            const skirt = mkPoints(
+              isCoarse ? 60 : 110, 2.6, 0.028, THREE.AdditiveBlending,
+              true, 1, galHazeTex, true,
+            );
+            fillHaze(
+              skirt, isCoarse ? 60 : 110,
+              arm.betaMinDeg, arm.betaMaxDeg, 1,
+              pal.body[0] * 0.72, pal.body[1] * 0.74, pal.body[2] * 0.93, 1.9,
+            );
+            skirt.done();
+          }
+        }
+        // —— 臂上细尘粒（2026-11-15 晚·粒子加厚轮）：臂宽
+        // ×1.15 散布的细小颗粒层（点径 0.05、半透明）——在
+        // 亮星点与辉光点之间补一档「尘粒」粒度，臂面读出
+        // 沙粒质感而非只有大点小点两档；色以淡蓝白为主、
+        // 约 15% 暖尘色；亮度压暗（0.30–0.62 × radK），只
+        // 作质感填充不抢亮结。呼吸/闪烁差异由 mkPoints 的
+        // 逐星相位属性自带，与其余层不同步
+        {
+          const fn = isCoarse ? 800 : 1500;
+          const fine = mkPoints(
+            fn, 0.05, 0.5, THREE.AdditiveBlending, true,
+          );
+          for (let k = 0; k < fn; k++) {
+            const betaDeg =
+              arm.betaMinDeg + rand() * (arm.betaMaxDeg - arm.betaMinDeg);
+            const c = armPlanPoint(arm, betaDeg);
+            const sr = gauss() * arm.widthKpc * 1.15;
+            put(
+              fine.pos, k,
+              c.x + (c.x / c.r) * sr,
+              c.y + (c.y / c.r) * sr,
+              laplace(0.06 * GAL_Z_STRETCH),
+            );
+            const radK = 0.32 + 0.68 * Math.exp(-c.r / 5.2);
+            const b = (0.3 + 0.32 * rand()) * dim * radK;
+            if (fine.col) {
+              if (rand() < 0.15)
+                putC(fine.col, k, jit(0.9 * b), jit(0.8 * b), jit(0.62 * b));
+              else
+                putC(fine.col, k, jit(Math.min(1, pal.body[0] * 1.06) * b), jit(Math.min(1, pal.body[1] * 1.04) * b), jit(pal.body[2] * b));
+            }
+          }
+          fine.done();
+        }
+        const nCl = isCoarse ? 80 : 140;
         for (let k = 0; k < nCl; k++) {
           const betaDeg =
             arm.betaMinDeg + rand() * (arm.betaMaxDeg - arm.betaMinDeg);
@@ -5668,10 +6349,12 @@ export function Globe({
           clusterSpec.push({
             x: c.x + (c.x / c.r) * sr,
             y: c.y + (c.y / c.r) * sr,
-            z: laplace(0.05),
+            z: laplace(0.05 * GAL_Z_STRETCH),
           });
         }
-        const nHii = isCoarse ? 26 : 46;
+        // HII 粉点缀密度按臂（色系重做轮）：人马最密、半
+        // 人马最疏——粉只作点缀、量级由 pal.hii 限定
+        const nHii = Math.round((isCoarse ? 36 : 64) * pal.hii);
         for (let k = 0; k < nHii; k++) {
           const betaDeg =
             arm.betaMinDeg + rand() * (arm.betaMaxDeg - arm.betaMinDeg);
@@ -5680,13 +6363,13 @@ export function Globe({
           hiiSpec.push({
             x: c.x + (c.x / c.r) * sr,
             y: c.y + (c.y / c.r) * sr,
-            z: laplace(0.045),
+            z: laplace(0.045 * GAL_Z_STRETCH),
           });
         }
       }
       {
         const { pos, col, done } = mkPoints(
-          clusterSpec.length, 0.21, 0.9, THREE.AdditiveBlending, true,
+          clusterSpec.length, 0.24, 0.95, THREE.AdditiveBlending, true,
         );
         clusterSpec.forEach((s, i) => {
           put(pos, i, s.x, s.y, s.z);
@@ -5700,32 +6383,452 @@ export function Globe({
       }
       {
         // HII 区是电离气体不是恒星：呼吸总闸压到 0.4，只留
-        // 极轻微的明暗起伏，不与星点同闪
+        // 极轻微的明暗起伏，不与星点同闪。质感纠正轮：点径
+        // 0.16→0.19、不透明度 0.85→0.92，品红加深（市面参
+        // 考里 H II 区是旋臂上明确的品红点缀，旧值偏粉白、
+        // 帧里几乎读不出）
         const { pos, col, done } = mkPoints(
-          hiiSpec.length, 0.16, 0.85, THREE.AdditiveBlending, true, 0.4,
+          hiiSpec.length, 0.19, 0.92, THREE.AdditiveBlending, true, 0.4,
         );
         hiiSpec.forEach((s, i) => {
           put(pos, i, s.x, s.y, s.z);
-          const b = 0.5 + 0.5 * Math.pow(rand(), 1.4);
+          const b = 0.6 + 0.4 * Math.pow(rand(), 1.4);
           // 色相轻微游走：多数玫红、约四分之一偏紫红，免整层一色
           if (col) {
-            if (rand() < 0.25) putC(col, i, 1.0 * b, 0.42 * b, 0.75 * b);
-            else putC(col, i, 1.0 * b, 0.55 * b, 0.67 * b);
+            if (rand() < 0.25) putC(col, i, 1.0 * b, 0.36 * b, 0.68 * b);
+            else putC(col, i, 1.0 * b, 0.46 * b, 0.6 * b);
           }
         });
         done();
       }
-      // —— 尘埃带：沿每条臂内侧（朝银心一侧偏 臂宽×0.8+0.1 kpc）
-      // 的暗红棕点，正常混合压暗盘面——旋臂内侧勾边出自此层
+      // ════════════════════════════════════════════════════
+      // —— 银河美术语言重构（2026-11-15 晚·招牌轮，元灿：
+      // 「银河系特效全开吧，最好完全重做……这几版都是同样
+      // 的美术风格」）——
+      // 【旧语言诊断】自初版到上轮重构，银河的成像单元始终
+      // 是「点」：星点、辉光点、尘点——密度与辉光叠层只是把
+      // 点阵加密加软，缩略图下仍读作黑底撒彩色点（星表/粒
+      // 子图语言）。真实星系摄影（M31/M33）与 SpaceEngine/
+      // 电影级星云渲染的成像单元是「介质」：连续的气尘光
+      // 场——亮度长在雾里、尘埃以剪影压在光上、亮星只是介
+      // 质表面稀疏的针尖。
+      // 【新语言】「气体介质 + 尘埃剪影 + 针尖亮星」三层成
+      // 像：① 程序绘制的气体盘面（沿 Xu 臂形逐段上色/多遍
+      // 描绘 + fbm 噪蚀团块感，三张同纹理盘面以 ±1.7 kpc
+      // 纵深错层出视差）作连续光场本体；② 不规则雾团辉光
+      // （fbm alpha 贴图的巨型软点两级）沿臂铺设，让光带
+      // 呈云团状起伏而非均匀描边；③ 尘埃剪影（同雾团贴
+      // 图、正常混合近黑大点）沿臂内缘压暗——吸收第一次
+      // 有「面」而不只是点列；④ 衍射耀斑亮星（十字耀斑贴
+      // 图）在亮星位稀疏点缀。既有点云层全数保留、退作介
+      // 质之上的星光颗粒与呼吸层；银心在新语言里由盘面中
+      // 心的暖金雾团 + 压低后的核芯辉光共同承担（环融进
+      // 光场，见弱化银心各注）。新层全登记 galHazeMats：
+      // 只属全览读法，邻域（校准层）恒隐、不沾真实星位。
+      // ════════════════════════════════════════════════════
+      // 雾团 alpha 贴图：多团高斯叠出的不规则云形（fbm 的
+      // 廉价近似——径向渐变团块错位叠加，边缘参差）
+      const galPuffTex = (() => {
+        const S = 256;
+        const c = document.createElement("canvas");
+        c.width = S;
+        c.height = S;
+        const g = c.getContext("2d")!;
+        g.globalCompositeOperation = "lighter";
+        const blob = (x: number, y: number, r: number, a: number) => {
+          const gr = g.createRadialGradient(x, y, 0, x, y, r);
+          gr.addColorStop(0, `rgba(255,255,255,${a})`);
+          gr.addColorStop(0.55, `rgba(255,255,255,${a * 0.45})`);
+          gr.addColorStop(1, "rgba(255,255,255,0)");
+          g.fillStyle = gr;
+          g.fillRect(x - r, y - r, r * 2, r * 2);
+        };
+        blob(128, 128, 120, 0.5);
+        blob(88, 104, 74, 0.42);
+        blob(172, 96, 66, 0.4);
+        blob(104, 164, 70, 0.38);
+        blob(160, 158, 78, 0.36);
+        blob(128, 84, 52, 0.3);
+        const tex = new THREE.CanvasTexture(c);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        return tex;
+      })();
+      // ① 气体盘面：2048 画布（移动 1024）逐像素外的矢量
+      // 描绘——臂形来自 armPlanPoint 采样折线（与点云同
+      // 源），多遍描绘（宽晕/带体/亮芯）+ 径向色温（内暖
+      // 金→中青蓝→外深蓝）+ 团块噪蚀（destination-out 随
+      // 机软团反复擦出气孔）+ HII 粉点缀。映射口径：画布
+      // ±16.5 kpc 对平面 ±8.25 wu，px = (0.5 + kx/33)·W、
+      // py = (0.5 − ky/33)·H（平面几何 rotateX(−90°) 后
+      // 的 UV 对位，见三层错层处注）
+      const galGasTex = (() => {
+        const S = isCoarse ? 1024 : 2048;
+        const c = document.createElement("canvas");
+        c.width = S;
+        c.height = S;
+        const g = c.getContext("2d")!;
+        const px = (kx: number) => (0.5 + kx / 33) * S;
+        const py = (ky: number) => (0.5 - ky / 33) * S;
+        const k2p = S / 33; // px / kpc
+        // 底洗：整盘极淡暖香槟径向雾（外盘不死黑；色系重
+        // 做轮：旧蓝灰→深蓝的径向洗一并废止，底色归暖中性、
+        // 蓝只许出现在臂上）
+        {
+          const gr = g.createRadialGradient(
+            S / 2, S / 2, 0, S / 2, S / 2, S * 0.5,
+          );
+          gr.addColorStop(0, "rgba(170,150,112,0.20)");
+          gr.addColorStop(0.35, "rgba(146,132,108,0.10)");
+          gr.addColorStop(0.75, "rgba(112,106,98,0.045)");
+          gr.addColorStop(1, "rgba(90,88,86,0)");
+          g.fillStyle = gr;
+          g.fillRect(0, 0, S, S);
+        }
+        // 臂体三遍描绘：同一折线、宽→窄/淡→浓（色系重做
+        // 轮：颜色逐臂取自 ARM_PALETTE——宽晕 = 本臂主体色
+        // 压深、带体 = 主体色、亮芯 = 亮结色向白靠 25%；
+        // 旧 gasCol 按半径内金→中青蓝→外深蓝的一刀切洗色
+        // 整条废止，半径不再决定臂色）
+        const armStroke = (
+          widthKpc: number,
+          alpha: number,
+          colFn: (arm: (typeof GALAXY_ARMS)[number]) => string,
+        ) => {
+          for (const arm of GALAXY_ARMS) {
+            const dimA = arm.inferred ? 0.5 : 1;
+            g.lineCap = "round";
+            g.lineJoin = "round";
+            let prev: { x: number; y: number; r: number } | null = null;
+            const seg = (
+              b0: number, b1: number, shade: number,
+            ) => {
+              prev = null;
+              for (let bd = b0; bd <= b1; bd += 2.5) {
+                const pt = armPlanPoint(arm, bd);
+                if (prev) {
+                  g.strokeStyle = colFn(arm);
+                  g.globalAlpha = alpha * dimA * shade;
+                  g.lineWidth = Math.max(1.5, widthKpc * k2p);
+                  g.beginPath();
+                  g.moveTo(px(prev.x), py(prev.y));
+                  g.lineTo(px(pt.x), py(pt.y));
+                  g.stroke();
+                }
+                prev = pt;
+              }
+            };
+            seg(arm.betaMinDeg, arm.betaMaxDeg, 1);
+            if (arm.extMinDeg != null) {
+              seg(arm.extMinDeg, arm.betaMinDeg, 0.42);
+            }
+          }
+          g.globalAlpha = 1;
+        };
+        const gasCss = (
+          c: [number, number, number],
+          kr: number,
+          kg: number,
+          kb: number,
+        ): string =>
+          `rgba(${Math.round(Math.min(1, c[0] * kr) * 255)},${Math.round(Math.min(1, c[1] * kg) * 255)},${Math.round(Math.min(1, c[2] * kb) * 255)},1)`;
+        armStroke(2.6, 0.05, (arm) =>
+          gasCss(armPal(arm).body, 0.52, 0.55, 0.62),
+        );
+        armStroke(1.15, 0.1, (arm) =>
+          gasCss(armPal(arm).body, 0.85, 0.87, 0.92),
+        );
+        armStroke(0.42, 0.16, (arm) => {
+          const br = armPal(arm).bright;
+          return gasCss(
+            [
+              br[0] + (1 - br[0]) * 0.25,
+              br[1] + (1 - br[1]) * 0.25,
+              br[2] + (1 - br[2]) * 0.25,
+            ],
+            1,
+            1,
+            1,
+          );
+        });
+        // 中心暖金雾团：核球在介质层的本体（与核芯辉光同
+        // 源同色，环坐其上——弱化银心在新语言里的落点）
+        {
+          const gr = g.createRadialGradient(
+            S / 2, S / 2, 0, S / 2, S / 2, 4.6 * k2p,
+          );
+          gr.addColorStop(0, "rgba(255,205,130,0.55)");
+          gr.addColorStop(0.4, "rgba(240,180,105,0.28)");
+          gr.addColorStop(1, "rgba(230,160,90,0)");
+          g.fillStyle = gr;
+          g.fillRect(0, 0, S, S);
+        }
+        // 团块噪蚀：随机软团以 destination-out 擦出气孔与
+        // 参差边缘（介质的「团块感」来源，两档尺度）
+        {
+          g.globalCompositeOperation = "destination-out";
+          for (let i = 0; i < 260; i++) {
+            const a = rand() * Math.PI * 2;
+            const rr = Math.pow(rand(), 0.6) * 15.5;
+            const x = S / 2 + Math.cos(a) * rr * k2p;
+            const y = S / 2 + Math.sin(a) * rr * k2p;
+            const rad = (0.5 + rand() * 1.7) * k2p;
+            const gr = g.createRadialGradient(x, y, 0, x, y, rad);
+            const al = 0.05 + rand() * 0.13;
+            gr.addColorStop(0, `rgba(0,0,0,${al})`);
+            gr.addColorStop(1, "rgba(0,0,0,0)");
+            g.fillStyle = gr;
+            g.fillRect(x - rad, y - rad, rad * 2, rad * 2);
+          }
+          for (let i = 0; i < 700; i++) {
+            const a = rand() * Math.PI * 2;
+            const rr = Math.pow(rand(), 0.7) * 15.5;
+            const x = S / 2 + Math.cos(a) * rr * k2p;
+            const y = S / 2 + Math.sin(a) * rr * k2p;
+            const rad = (0.12 + rand() * 0.5) * k2p;
+            const gr = g.createRadialGradient(x, y, 0, x, y, rad);
+            const al = 0.06 + rand() * 0.16;
+            gr.addColorStop(0, `rgba(0,0,0,${al})`);
+            gr.addColorStop(1, "rgba(0,0,0,0)");
+            g.fillStyle = gr;
+            g.fillRect(x - rad, y - rad, rad * 2, rad * 2);
+          }
+          g.globalCompositeOperation = "source-over";
+        }
+        // HII 粉点缀：沿臂随机小软点（玫红，与点云 HII 层
+        // 同色系），只在介质层作色斑
+        for (const arm of GALAXY_ARMS) {
+          if (arm.inferred) continue;
+          const nP = isCoarse ? 26 : 44;
+          for (let i = 0; i < nP; i++) {
+            const bd =
+              arm.betaMinDeg + rand() * (arm.betaMaxDeg - arm.betaMinDeg);
+            const pt = armPlanPoint(arm, bd);
+            const sr = gauss() * arm.widthKpc * 0.4;
+            const kx = pt.x + (pt.x / pt.r) * sr;
+            const ky = pt.y + (pt.y / pt.r) * sr;
+            const rad = (0.14 + rand() * 0.3) * k2p;
+            const gr = g.createRadialGradient(
+              px(kx), py(ky), 0, px(kx), py(ky), rad,
+            );
+            gr.addColorStop(0, "rgba(255,120,165,0.20)");
+            gr.addColorStop(1, "rgba(255,120,165,0)");
+            g.fillStyle = gr;
+            g.fillRect(px(kx) - rad, py(ky) - rad, rad * 2, rad * 2);
+          }
+        }
+        const tex = new THREE.CanvasTexture(c);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        return tex;
+      })();
+      // 三层错层盘面：同纹理、纵深 y = 0 / ±0.85 wu（=
+      // ±1.7 kpc）——旋转/改倾角时三层视差错动，平面读作
+      // 有厚度的气体层而非一张贴图；中层最浓、上下层淡
+      // （纵深里的介质渐隐）。几何 rotateX(−π/2)：顶点
+      // (x, y) → 场景 (x, 0, −y)，纹理 UV 随之与画布映射
+      // 对位（见 galGasTex 头注）
+      {
+        const gasGeo = new THREE.PlaneGeometry(16.5, 16.5);
+        gasGeo.rotateX(-Math.PI / 2);
+        const gasLayers: Array<[number, number]> = [
+          [0, 0.5],
+          [0.85, 0.26],
+          [-0.85, 0.26],
+        ];
+        for (const [gy, gop] of gasLayers) {
+          const m = new THREE.MeshBasicMaterial({
+            map: galGasTex,
+            transparent: true,
+            opacity: gop,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+            side: THREE.DoubleSide,
+          });
+          const mesh = new THREE.Mesh(gasGeo, m);
+          mesh.position.y = gy;
+          mesh.renderOrder = 0;
+          mesh.frustumCulled = false;
+          galaxySpin.add(mesh);
+          galHazeMats.push({ mat: m, base: gop });
+        }
+      }
+      // ② 雾团辉光两级（巨型软点、雾团贴图）：沿臂采样、
+      // 散布比星点宽（臂宽 ×1.3），色随半径在青蓝/蓝/暖
+      // 间走、约 8% 玫红（气体辉光的色温纵深）；大级
+      // （3.2 wu）极淡成云底、小级（1.6 wu）成云团亮斑。
+      // z 抽拉得更厚（Laplace 0.5 kpc 等效，未拉伸口径
+      // 0.1）——雾在纵深里成层，改倾角时云层视差可读
       for (const arm of GALAXY_ARMS) {
-        const n = isCoarse ? 380 : 620;
-        // 精致轮：点更大更淡、径向散布放宽——尘带边缘由「一排
-        // 暗点勾线」改成渐渐没入盘面的软带（点数不变）
+        const puffDim = arm.inferred ? 0.5 : 1;
+        const fillPuffs = (
+          set: { pos: Float32Array; col: Float32Array | null; done: () => void },
+          count: number,
+        ): void => {
+          for (let k = 0; k < count; k++) {
+            const betaDeg =
+              arm.betaMinDeg + rand() * (arm.betaMaxDeg - arm.betaMinDeg);
+            const c = armPlanPoint(arm, betaDeg);
+            const sr = gauss() * arm.widthKpc * 1.3;
+            put(
+              set.pos, k,
+              c.x + (c.x / c.r) * sr,
+              c.y + (c.y / c.r) * sr,
+              laplace(0.5),
+            );
+            const radK = 0.32 + 0.68 * Math.exp(-c.r / 5.2);
+            const b = (0.5 + 0.5 * rand()) * puffDim * radK;
+            if (set.col) {
+              // 色系重做轮：雾团随本臂色板——主体 = pal.body；
+              // 内盘段（r<4）向暖香槟掺一半（内盘老星底色从
+              // 臂根透出来）；粉点缀占比按臂 pal.hii（旧口径
+              // 按半径在青蓝/蓝间洗色废止）
+              const pal = armPal(arm);
+              const pick = rand();
+              if (pick < 0.08 * pal.hii)
+                putC(set.col, k, jit(0.85 * b), jit(0.45 * b), jit(0.6 * b));
+              else if (c.r < 4)
+                putC(
+                  set.col, k,
+                  jit((pal.body[0] * 0.5 + 0.48) * b),
+                  jit((pal.body[1] * 0.5 + 0.39) * b),
+                  jit((pal.body[2] * 0.5 + 0.26) * b),
+                );
+              else
+                putC(set.col, k, jit(pal.body[0] * b), jit(pal.body[1] * b), jit(pal.body[2] * b));
+            }
+          }
+        };
+        const puffA = mkPoints(
+          isCoarse ? 170 : 300, 1.6, 0.055, THREE.AdditiveBlending,
+          true, 1, galPuffTex, true,
+        );
+        fillPuffs(puffA, isCoarse ? 170 : 300);
+        puffA.done();
+        if (!arm.inferred) {
+          const puffB = mkPoints(
+            isCoarse ? 70 : 120, 3.2, 0.032, THREE.AdditiveBlending,
+            true, 1, galPuffTex, true,
+          );
+          fillPuffs(puffB, isCoarse ? 70 : 120);
+          puffB.done();
+        }
+      }
+      // ③ 尘埃剪影（雾团贴图、正常混合、近黑暖褐）：沿臂
+      // 内缘（与尘点同采样线）的大幅软吸收——尘带第一次
+      // 以「面」压光：宽 1.4 wu 的云团剪影错落叠在内缘，
+      // 与点尘层（缝芯）+ 暗幕（缝肩）构成三级吸收。绘制
+      // 序 1（压在一切加色层之后，同尘带纪律）；不呼吸
+      {
+        const silN = isCoarse ? 110 : 200;
+        const sil = mkPoints(
+          silN, 1.4, 0.1, THREE.NormalBlending, false, 0,
+          galPuffTex, true, 1,
+        );
+        (sil.mat.uniforms.uColor!.value as THREE.Color).set("#0d0603");
+        for (let si = 0; si < silN; si++) {
+          const arm = GALAXY_ARMS[si % GALAXY_ARMS.length]!;
+          const betaDeg =
+            arm.betaMinDeg + rand() * (arm.betaMaxDeg - arm.betaMinDeg);
+          const c = armPlanPoint(arm, betaDeg);
+          const inward =
+            arm.widthKpc * 0.8 + 0.1 + gauss() * arm.widthKpc * 0.5;
+          put(
+            sil.pos, si,
+            c.x - (c.x / c.r) * inward,
+            c.y - (c.y / c.r) * inward,
+            laplace(0.04 * GAL_Z_STRETCH),
+          );
+        }
+        sil.done();
+      }
+      // ④ 衍射耀斑亮星：十字耀斑贴图（细长十字 + 核心辉
+      // 光，画布逐像素 alpha）——天体摄影里亮星的签名；
+      // 沿臂亮星位稀疏点缀（采样同星团口径、散布更紧），
+      // 白/蓝白两色，呼吸压低（0.7）免与星点同闪
+      const galSpikeTex = (() => {
+        const S = 128;
+        const c = document.createElement("canvas");
+        c.width = S;
+        c.height = S;
+        const g = c.getContext("2d")!;
+        const img = g.createImageData(S, S);
+        const d = img.data;
+        for (let y = 0; y < S; y++) {
+          for (let x = 0; x < S; x++) {
+            const dx = (x - S / 2 + 0.5) / (S / 2);
+            const dy = (y - S / 2 + 0.5) / (S / 2);
+            const r = Math.hypot(dx, dy);
+            const core = Math.exp(-r * r * 18);
+            const spike =
+              Math.exp(-Math.abs(dy) * 26) * Math.exp(-Math.abs(dx) * 3.2) +
+              Math.exp(-Math.abs(dx) * 26) * Math.exp(-Math.abs(dy) * 3.2);
+            const a = Math.min(1, core + spike * 0.55);
+            const idx = (y * S + x) * 4;
+            d[idx] = 255;
+            d[idx + 1] = 255;
+            d[idx + 2] = 255;
+            d[idx + 3] = a * 255;
+          }
+        }
+        g.putImageData(img, 0, 0);
+        const tex = new THREE.CanvasTexture(c);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        return tex;
+      })();
+      {
+        const spN = isCoarse ? 70 : 130;
+        const spikes = mkPoints(
+          spN, 0.55, 0.5, THREE.AdditiveBlending, true, 0.7,
+          galSpikeTex,
+        );
+        for (let k = 0; k < spN; k++) {
+          const arm = GALAXY_ARMS[k % GALAXY_ARMS.length]!;
+          const betaDeg =
+            arm.betaMinDeg + rand() * (arm.betaMaxDeg - arm.betaMinDeg);
+          const c = armPlanPoint(arm, betaDeg);
+          const sr = gauss() * arm.widthKpc * 0.4;
+          put(
+            spikes.pos, k,
+            c.x + (c.x / c.r) * sr,
+            c.y + (c.y / c.r) * sr,
+            laplace(0.05 * GAL_Z_STRETCH),
+          );
+          const b = 0.55 + 0.45 * rand();
+          if (spikes.col) {
+            if (rand() < 0.3)
+              putC(spikes.col, k, jit(b), jit(b), jit(b));
+            else
+              putC(spikes.col, k, jit(0.78 * b), jit(0.87 * b), jit(1.0 * b));
+          }
+        }
+        spikes.done();
+      }
+      // —— 尘埃带：沿每条臂内侧（朝银心一侧偏 臂宽×0.8+0.1 kpc）
+      // 的暗红棕点，正常混合压暗盘面——旋臂内侧勾边出自此层。
+      // 几何沿既有 Xu 旋臂的臂内缘塑形（示意层，不另编数据）。
+      // 质感纠正轮（市面参考简报：「尘带是质感的命根子，没
+      // 有尘带就是 CD」；Gaia 全天图的暗尘裂缝）：点数 620→
+      // 950/臂（移动 380→560），点径 0.14→0.17、不透明度
+      // 0.36→0.42，色由近黑 #1c0f0a 改暖棕 #2a1409——旧值
+      // 太淡太稀，近平行视角下带中劈缝读不出来；本轮让暗
+      // 带在亮臂内侧成连续的吸收带。【此段参数已被下方视觉
+      // 重构轮取代：点径/透明度/色/绘制序与暗幕层见循环内注】
+      for (const arm of GALAXY_ARMS) {
+        const n = isCoarse ? 560 : 950;
+        // 视觉重构轮（画法三·尘带真暗缝）：采样口径（沿臂内
+        // 缘偏移 臂宽×0.8+0.1、散布 臂宽×0.42、点数）一字不
+        // 动，只改落笔——点径 0.17→0.36、透明度 0.42→0.50、
+        // 色 #2a1409→近黑暖棕 #160a05、绘制序 order=1 恒在
+        // 一切加色层之后。旧版三重弱：点太小（全览帧里约
+        // 5–11 px 的软点列）、色不够黑、且核球/星晕/辉光精
+        // 灵登记在它之后又把内臂的缝冲亮；Gaia 全天图的暗
+        // 尘缝靠「亮带够亮 + 吸收够黑够宽」对比成立，本轮
+        // 亮带由光带层补足、吸收由本层 + 下方暗幕补足
         // 尘带不呼吸（breatheAmp=0）、颜色走着色器 uColor
         const { pos, done, mat: dustMat } = mkPoints(
-          n, 0.14, 0.36, THREE.NormalBlending, false, 0,
+          n, 0.36, 0.5, THREE.NormalBlending, false, 0,
+          null, false, 1,
         );
-        (dustMat.uniforms.uColor!.value as THREE.Color).set("#1c0f0a");
+        (dustMat.uniforms.uColor!.value as THREE.Color).set("#160a05");
         for (let i = 0; i < n; i++) {
           const betaDeg =
             arm.betaMinDeg + rand() * (arm.betaMaxDeg - arm.betaMinDeg);
@@ -5735,17 +6838,49 @@ export function Globe({
             pos, i,
             c.x - (c.x / c.r) * inward,
             c.y - (c.y / c.r) * inward,
-            laplace(0.04),
+            laplace(0.04 * GAL_Z_STRETCH),
           );
         }
         done();
+        // —— 尘带暗幕（同轮新增）：与主层同一条内缘线的宽肩
+        // 大点（0.85、极低透明、近黑）——主层是缝的芯，这层
+        // 是缝向两侧缓降的肩，让暗缝在手机全览尺度下有足够
+        // 宽度读成「带中劈开的吸收带」而非一串暗点；同为
+        // order=1 落笔在加色层之后。登记 galHazeMats：只属
+        // 全览读法，邻域淡出（主层沿旧制留在邻域，点小而
+        // 疏、是既有行为）
+        {
+          const vn = isCoarse ? 220 : 380;
+          const veil = mkPoints(
+            vn, 0.85, 0.055, THREE.NormalBlending, false, 0,
+            galHazeTex, true, 1,
+          );
+          (veil.mat.uniforms.uColor!.value as THREE.Color).set("#100704");
+          for (let i = 0; i < vn; i++) {
+            const betaDeg =
+              arm.betaMinDeg + rand() * (arm.betaMaxDeg - arm.betaMinDeg);
+            const c = armPlanPoint(arm, betaDeg);
+            const inward =
+              arm.widthKpc * 0.8 + 0.1 + gauss() * arm.widthKpc * 0.42;
+            put(
+              veil.pos, i,
+              c.x - (c.x / c.r) * inward,
+              c.y - (c.y / c.r) * inward,
+              laplace(0.04 * GAL_Z_STRETCH),
+            );
+          }
+          veil.done();
+        }
       }
       // —— 中央棒 + 核球：棒半长 3.1 kpc（论文 §4.3 引 Hilmi+2020），
       // 暖金点云；核球近球状压扁。二者皆老恒星色，与盘面蓝白分层
       {
-        const n = isCoarse ? 3800 : 6200;
+        // 点数 6,200→7,400（移动 3,800→4,600）、点径 0.095→
+        // 0.105、不透明度 0.85→0.9（质感纠正轮：近平行视角
+        // 下中央隆起是三读数之一，核球须成穹不成斑）
+        const n = isCoarse ? 4600 : 7400;
         const { pos, col, done } = mkPoints(
-          n, 0.095, 0.85, THREE.AdditiveBlending, true,
+          n, 0.105, 0.9, THREE.AdditiveBlending, true,
         );
         const aRad = (GAL_BAR_ANGLE_DEG * Math.PI) / 180;
         const ax = Math.sin(aRad);
@@ -5760,21 +6895,25 @@ export function Globe({
             const across = gauss() * 0.5 * (1 - Math.abs(t) * 0.35);
             x = ax * along + ay * across;
             y = ay * along - ax * across;
-            z = gauss() * 0.3;
+            // z 拉伸（同轮）：棒/核球只乘 ×2（0.3→0.6 /
+            // 0.5→1.0）——核球本近球形，全额 ×5 会拉成竖直
+            // 纺锤、反噬弱化银心轮的收束；×2 后核球 z 标高
+            // 1.0 与 x/y 0.95 近等，读作饱满球体
+            z = gauss() * 0.3 * 2;
           } else {
             x = gauss() * 0.95;
             y = gauss() * 0.95;
-            z = gauss() * 0.5;
+            z = gauss() * 0.5 * 2;
           }
           put(pos, i, x, y, z);
-          const b = 0.34 + 0.66 * Math.pow(rand(), 1.6);
-          // 核球/棒是老星族：金橙打底（真机修正轮加深到
-          // 0.74/0.38，与旋臂蓝拉开成一眼可分的金核）、逐星
-          // 抖动，约 4% 橙红巨星
+          const b = 0.42 + 0.58 * Math.pow(rand(), 1.4);
+          // 核球/棒是老星族：黄白金橙打底（0.76/0.40，市面参
+          // 考的暖核口径，与旋臂蓝拉开成一眼可分的金核）、
+          // 逐星抖动，约 4% 橙红巨星
           if (col) {
             if (rand() < 0.04)
               putC(col, i, jit(1.0 * b), jit(0.42 * b), jit(0.2 * b));
-            else putC(col, i, jit(1.0 * b), jit(0.74 * b), jit(0.38 * b));
+            else putC(col, i, jit(1.0 * b), jit(0.76 * b), jit(0.4 * b));
           }
         }
         done();
@@ -5786,9 +6925,12 @@ export function Globe({
       // 盘」；参数为发表量级的总体示意（DATA-PLAN 有注）。旧
       // 版均匀球壳 2.5–15 kpc 蓝点层就此退役
       {
-        const n = isCoarse ? 900 : 1600;
+        // 点数 1,600→2,000（移动 900→1,100）、不透明度 0.26→
+        // 0.3（质感纠正轮：近平行视角下厚盘晕是中央隆起剪影
+        // 的一部分，旧值太淡、盘上下读不出晕）
+        const n = isCoarse ? 1100 : 2000;
         const { pos, col, done } = mkPoints(
-          n, 0.07, 0.26, THREE.AdditiveBlending, true, 0.7,
+          n, 0.07, 0.3, THREE.AdditiveBlending, true, 0.7,
         );
         const rMin = 3;
         const rMax = 50;
@@ -5855,14 +6997,22 @@ export function Globe({
           ),
           color: 0xffc978,
           transparent: true,
-          opacity: 0.5,
+          opacity: 0.58,
           depthWrite: false,
           blending: THREE.AdditiveBlending,
         }),
       );
-      coreGlow.scale.set(3.3, 3.3, 1);
+      // 质感纠正轮：核芯晕 0.5→0.58、尺度 3.3→3.6——SpaceEngine
+      // 式「尘埃向中心渐变为核球的黄色雾」，中心黄雾是近平行
+      // 视角下隆起读数的一半。视觉重构轮（画法四·核心融合）：
+      // 再收紧到 3.4 并抬到 0.72——核心亮度收束的顶点由这层
+      // 与核球点云共同承担，EHT 环背光垫（见下）同源于此。
+      // 弱化银心轮（2026-11-15 晚）：顶点过抢——尺度 3.4→
+      // 3.0（收束更紧）、峰值 0.72→0.58，中心回到「盘面自
+      // 然变亮的顶点」而非一团独立亮斑
+      coreGlow.scale.set(3.0, 3.0, 1);
       galaxySpin.add(coreGlow);
-      galFadeMats.push({ mat: coreGlow.material, base: 0.5 });
+      galFadeMats.push({ mat: coreGlow.material, base: 0.58 });
       // 核球中层暖晕（精致轮新增一层）：核芯小晕与盘面大晕之间
       // 补一级过渡，银心的光不再是「一团亮斑 + 一大片雾」两段式
       const midGlow = new THREE.Sprite(
@@ -5873,27 +7023,59 @@ export function Globe({
           ),
           color: 0xffc98c,
           transparent: true,
-          opacity: 0.15,
+          opacity: 0.22,
           depthWrite: false,
           blending: THREE.AdditiveBlending,
         }),
       );
-      midGlow.scale.set(7.4, 7.4, 1);
+      midGlow.scale.set(8.2, 8.2, 1);
       galaxySpin.add(midGlow);
-      galFadeMats.push({ mat: midGlow.material, base: 0.15 });
+      galFadeMats.push({ mat: midGlow.material, base: 0.22 });
       const discGlow = new THREE.Sprite(
         new THREE.SpriteMaterial({
           map: glowTex,
           color: 0x5f7fb8,
           transparent: true,
-          opacity: 0.11,
+          opacity: 0.13,
           depthWrite: false,
           blending: THREE.AdditiveBlending,
         }),
       );
       discGlow.scale.set(13.5, 13.5, 1);
       galaxySpin.add(discGlow);
-      galFadeMats.push({ mat: discGlow.material, base: 0.11 });
+      galFadeMats.push({ mat: discGlow.material, base: 0.13 });
+      // —— EHT 环背光垫（银河视觉重构轮·画法四·核心融合）：
+      // 一枚宽 2.9 的暖金辉光精灵垫在黑洞精灵（renderOrder
+      // 9）之后（本层 8）——环外径 1.25，此垫把环周约 2.3 倍
+      // 环径的范围铺成与核芯同色的亮场：旧版环外只有程序纹
+      // 理自带的 ≤0.07 极淡晕、环一出纹理边缘就落在暗背景
+      // 上，缩略图里读成一枚独立的橙色甜甜圈；垫后环坐在核
+      // 球辉光里，亮度自环向外连续缓降、无落差台阶。黑洞纹
+      // 理本体（几何/配色带/亮结口径）一字未动，只改它与核
+      // 球辉光的融合读法
+      // 弱化银心轮（2026-11-15 晚）：垫的强度与范围同压——
+      // 宽 2.9→2.6、峰值 0.42→0.30：融合关系不变（环仍坐
+      // 在核球辉光里、无台阶），只是整片中央亮场的电平下
+      // 调，缩略图第一眼不再被中心单独抢走
+      {
+        const bhBack = new THREE.Sprite(
+          new THREE.SpriteMaterial({
+            map: makeGlowTexture(
+              "rgba(255,196,116,0.85)",
+              "rgba(255,158,74,0.30)",
+            ),
+            color: 0xffbe78,
+            transparent: true,
+            opacity: 0.3,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        bhBack.scale.set(2.6, 2.6, 1);
+        bhBack.renderOrder = 8;
+        galaxySpin.add(bhBack);
+        galFadeMats.push({ mat: bhBack.material, base: 0.3 });
+      }
       // —— 银心黑洞本体 · 人马座 A*（2022 EHT 光环轮，用户：
       // 「把它的中心做成 2022 年那个光环的样子」「就是最中心
       // 那个核换了就行 旁边的粒子都别动」）：旧三件（金橙泛光
@@ -5960,14 +7142,18 @@ export function Globe({
             if (d > Math.PI) d = Math.PI * 2 - d;
             return d;
           };
-          // 配色带：黑→暗橙→橙→金黄→黄白（发表影像色带）
+          // 配色带：黑→暗橙→橙→金黄→黄白（发表影像色带；
+          // 2026-11-15 质感纠正轮中段橙金加深：0.38 档
+          // (198,76,8)→(214,84,6)、0.58 档 (255,124,16)→
+          // (255,134,10)——旧带在小尺寸帧里橙段发虚发淡，
+          // 与核球金雾糊成一片，环自身的橙金须独立可读）
           const STOPS: Array<[number, number, number, number]> = [
             [0, 24, 7, 1],
-            [0.18, 96, 32, 4],
-            [0.38, 198, 76, 8],
-            [0.58, 255, 124, 16],
-            [0.78, 255, 178, 56],
-            [0.92, 255, 216, 122],
+            [0.18, 104, 34, 3],
+            [0.38, 214, 84, 6],
+            [0.58, 255, 134, 10],
+            [0.78, 255, 182, 54],
+            [0.92, 255, 218, 124],
             [1.08, 255, 247, 216],
           ];
           const ramp = (t: number): [number, number, number] => {
@@ -5997,22 +7183,29 @@ export function Globe({
               const rho = r / RS;
               // 方位亮度：底部最亮、顶部约半亮；再叠四处亮结
               // （底部主结最强，余结环绕分布）
+              // 弱化银心轮（2026-11-15 晚，用户：「银心现在仍
+              // 太抢眼，压它的光、不改它的形」）：方位基底
+              // 0.52+0.62 → 0.47+0.45、四结增益 0.55/0.30/
+              // 0.24/0.16 → 0.38/0.21/0.17/0.11——峰值亮度与
+              // 亮结对比同压约三成，环读作核球辉光里自然亮
+              // 起的一圈而非独立物件；几何（RS/ρ 廓形/毛边
+              // 噪声）与配色带一字未动
               const dAz = 0.5 + 0.5 * Math.cos(theta - TH_B);
-              let bright = 0.52 + 0.62 * Math.pow(dAz, 1.7);
+              let bright = 0.47 + 0.45 * Math.pow(dAz, 1.7);
               bright +=
-                0.55 *
+                0.38 *
                   Math.exp(
                     -(angDist(theta, TH_B) ** 2) / (2 * 0.42 * 0.42),
                   ) +
-                0.3 *
+                0.21 *
                   Math.exp(
                     -(angDist(theta, TH_B + 2.3) ** 2) / (2 * 0.3 * 0.3),
                   ) +
-                0.24 *
+                0.17 *
                   Math.exp(
                     -(angDist(theta, TH_B - 2.0) ** 2) / (2 * 0.26 * 0.26),
                   ) +
-                0.16 *
+                0.11 *
                   Math.exp(
                     -(angDist(theta, TH_B + 3.4) ** 2) / (2 * 0.3 * 0.3),
                   );
@@ -6021,14 +7214,16 @@ export function Globe({
               const rhoJ = (r + wob) / RS;
               const rise = sstep(0.98, 1.45, rhoJ);
               const fall = 1 - sstep(1.85, 2.52, rhoJ);
-              const peak = 0.72 + 0.5 * Math.exp(-(((rhoJ - 1.62) / 0.4) ** 2));
+              // 径向峰廓同轮压低（0.78+0.55 → 0.74+0.40）：环
+              // 脊峰值再让一档，与方位亮度同向收（弱化银心轮）
+              const peak = 0.74 + 0.4 * Math.exp(-(((rhoJ - 1.62) / 0.4) ** 2));
               const grain = 0.7 + 0.6 * fbm(x * 0.06, y * 0.06);
               let inten = rise * fall * peak * bright * grain;
               // 环外极淡暖晕收尾（远逊旧泛光，只防硬截断）
               if (rho > 2.5)
                 inten +=
-                  0.05 * Math.exp(-(rho - 2.5) * 1.7) * (0.6 + 0.4 * dAz);
-              const aR = Math.min(1, Math.max(0, inten * 1.1));
+                  0.07 * Math.exp(-(rho - 2.5) * 1.7) * (0.6 + 0.4 * dAz);
+              const aR = Math.min(1, Math.max(0, inten * 1.18));
               const [cr, cg, cb] = ramp(Math.min(1.1, inten));
               // 暗影：近黑，alpha 在 ρ 0.88→1.12 间让位给环
               const aS = 1 - sstep(0.88, 1.12, rhoJ);
@@ -6066,18 +7261,19 @@ export function Globe({
         galFadeMats.push({ mat: bh.material, base: 1 });
       }
       // —— 比例尺：5 kpc 线段 + 两端短刻。钉 galaxyGroup 南缘
-      // 固定位（不随盘自转）。位置随定标两度内移：真机修正轮
-      // fitZ≈22 时置 x 0.2..2.7、z 6.2（投影 NDC x 0.06..0.85）；
-      // 真机修正轮二定标再放大（fitZ≈17.9）后旧位右端投影约
-      // 1.10 NDC、签右缘约 1.02——实帧右缘切线切字。内移至
-      // x −1.6..0.9、z 5.4（线长仍恰 2.5 世界单位 = 5 kpc，
-      // 只挪位置不改长度）：fitZ 17.9、宽高比 0.497 公式构
-      // 造——线 NDC x −0.62..0.35、y ≈ −0.61，签（中心
-      // (−0.35, 0, 4.9)、挂在线体上方）横跨约 −0.48..0.22；
-      // 再叠全览取景偏移 frameK 的最坏平移（±0.35 NDC）仍
-      // 全在框内。线与签
-      // 同入 galHubMats（邻域档随集线层淡出，且其组局部位
-      // 置离太阳 ~7.5 单位、近览窗外，双保险）。
+      // 固定位（不随盘自转）。位置沿革：fitZ≈22 时 x 0.2..2.7、
+      // z 6.2；fitZ≈17.9 后内移 x −1.6..0.9、z 5.4；倾角
+      // 0.96（离面 55°）轮内收 z 4.3 / 签 z 3.8。本轮倾角改
+      // 0.61（离面 35°，见 GAL_FULL_TILT 注）后同式复算（fitZ
+      // 17.9、tanV = tan21°、盘面点 NDC y = −z·sinθ /
+      // ((fitZ − z·cosθ)·tanV)）：保线 NDC y ≈ −0.60 须
+      // z 5.42 → 取 5.4，签保 y ≈ −0.51 须 z 4.78 → 取 4.8；
+      // 线 x −1.6..0.9 不变（长仍恰 2.5 世界单位 = 5 kpc，
+      // 只挪位置不改长度），NDC x −0.62..0.35；签 (−0.35, 0,
+      // 4.8) 横跨约 −0.48..0.22、在线上方约 0.09 NDC；叠
+      // frameK 最坏平移（±0.35 NDC）仍全在框内。线与签同入
+      // galHubMats（邻域档随集线层淡出，且其组局部位置离太
+      // 阳 ~7.5 单位、近览窗外，双保险）。
       {
         const geo = new THREE.BufferGeometry();
         geo.setAttribute(
@@ -6103,11 +7299,9 @@ export function Globe({
         const sLbl = makeGalaxyLabel("5 千秒差距", "#8fa8c8", 1);
         const sw = 1.3 * (isCoarse ? 1.43 : 1.3);
         sLbl.scale.set(sw, sw * (76 / 336), 1);
-        // 签位（真机修正轮二验收帧复核）：z 取 4.9——比线（z
-        // 5.4）更靠相机上侧，投影恰在比例尺上方约 30 px、且
-        // 离底栏按钮行留约 70 px（z 若同旧值 6.25 一档，纵投
-        // 会沉到按钮行后被压住，验收帧实见签缺失）
-        sLbl.position.set(-0.35, 0, 4.9);
+        // 签位：随倾角 0.61 复算至 z 4.8（线 z 5.4），相对纵
+        // 位与离底栏距离按新倾角复算不变（见线段头注）
+        sLbl.position.set(-0.35, 0, 4.8);
         sLbl.renderOrder = 12;
         galaxyGroup.add(sLbl);
         galHubMats.push({
@@ -6246,6 +7440,14 @@ export function Globe({
           }),
         );
         addAnchor(core, L(0, 0, 0), "hub", 0.55, 0.55, 1);
+        // 核心融合补完（视觉重构轮验收帧抓到）：银心标记点走
+        // 锚点默认 renderOrder 12、压在黑洞精灵（9）之上——
+        // 0.55 宽的加色辉光正落在 0.50 宽的暗影中央，把暗影
+        // 顶成一只带高光的眼球，EHT 暗影读不成立。改 8（垫
+        // 在环之后、与背光垫同级）：暗影 alpha≈1 处标记被环
+        // 本体盖住，环外透明区只剩与背光垫同色的 faint 辉
+        // 光，不成独立元素；名签锚点仍 12 在上
+        core.renderOrder = 8;
         addAnchor(
           makeGalaxyLabel("银心 · 人马座 A*", "#ffd9a0", 1),
           L(0, -1.3, 0.1),
@@ -6280,8 +7482,10 @@ export function Globe({
           }),
         );
         addAnchor(ring, galSunBase.clone(), "sun", 0.62, 0.36, 1, 0, 0, true);
+        const sunLabelSprite = makeGalaxyLabel("太阳系", "#ffd98f", 1);
+        galSunLabel = sunLabelSprite;
         addAnchor(
-          makeGalaxyLabel("太阳系", "#ffd98f", 1),
+          sunLabelSprite,
           galSunBase.clone(),
           "sun",
           1.0 * LW,
@@ -6730,6 +7934,24 @@ export function Globe({
         marker.visible = false;
         marker.frustumCulled = false;
         scene.add(marker);
+        // 可点暗示（2026-11-15 邻域导航改判 B3）：罗盘标记本轮
+        // 起可点（点它回银河全览）——给它与太阳标记同一套视觉
+        // 语言的呼吸光环（太阳标记恒有呼吸环、旧罗盘没有，正
+        // 是它看着像纯摆设的原因）：细金环绕标记缓慢呼吸，不
+        // 做按钮形、不加文字，罗盘本来的样子不破
+        const pulseMat = new THREE.SpriteMaterial({
+          map: makeRingTexture(),
+          color: 0xffd98f,
+          transparent: true,
+          opacity: 0,
+          depthWrite: false,
+          depthTest: false,
+        });
+        const pulse = new THREE.Sprite(pulseMat);
+        pulse.renderOrder = 13;
+        pulse.visible = false;
+        pulse.frustumCulled = false;
+        scene.add(pulse);
         const label = makeGalaxyLabel(
           "银心方向",
           "#ffd9a0",
@@ -6749,6 +7971,8 @@ export function Globe({
           lineMat,
           marker,
           markerMat,
+          pulse,
+          pulseMat,
           label,
           labelMat,
         };
@@ -7007,17 +8231,40 @@ export function Globe({
      * 二三/轩辕十四/角宿一/心宿二/尾宿八）：animate 按连线图
      * 可见度 zodiacFigVis 同步淡变，只随图形在位 */
     const zodiacStarLabels: THREE.Sprite[] = [];
-    /** 十二星座骨架材质登记（极简星图三度重做：单色奶金发丝
-     * 线/五角星形节点/四角星芒三件，animate 按 sunFade × 全
-     * 览在位系数 zodiacFigK 驱动） */
+    /** 十二星座骨架材质登记（单色奶金线/五角星形节点/四角
+     * 星芒三件，animate 按 sunFade × 全览在位系数
+     * zodiacFigK 驱动） */
     let zodiacFigMat: THREE.LineBasicMaterial | null = null;
     let zodiacNodeMat: THREE.ShaderMaterial | null = null;
     let zodiacSparkMat: THREE.ShaderMaterial | null = null;
-    /** 狮子透明轮廓材质登记（2026-11-14 样板轮：骨架之下的淡
-     * 印狮影——填充 + 发丝描边两件，animate 按同一 zodiacFigVis
-     * 同步淡变，峰值透明度各自压低，恒不抢骨架） */
-    let zodiacLeoFillMat: THREE.MeshBasicMaterial | null = null;
-    let zodiacLeoEdgeMat: THREE.LineBasicMaterial | null = null;
+    /** 十二宫轮廓材质登记（重构轮四层：逐宫渐变填充（着
+     * 色器）+ 宽光鞘（着色器）+ 缎带光边 + 标志内线各一
+     * 件、按宫序登记，animate 按同一 zodiacFigVis 同步淡
+     * 变；设计语言见构建段总注） */
+    const zodiacOutlineFillMats: THREE.ShaderMaterial[] = [];
+    const zodiacOutlineEdgeMats: THREE.MeshBasicMaterial[] = [];
+    const zodiacOutlineSheathMats: THREE.ShaderMaterial[] = [];
+    /** 星座重构轮（2026-11-15 夜）新增登记：每宫标志内线
+     * 材质（逐宫一件）+ 星点柔光晕 / 轮廓内星尘（各一件
+     * 全图共享着色器），animate 按同一 zodiacFigVis 驱动 */
+    const zodiacDetailMats: THREE.LineBasicMaterial[] = [];
+    let zodiacHaloMat: THREE.ShaderMaterial | null = null;
+    let zodiacDustMat: THREE.ShaderMaterial | null = null;
+    // —— 十二宫 3D 水晶模型（2026-11-16 元灿工单：亲发分体
+    // GLB 包替代绘制版图形）：开关 ZODIAC_FIG_MODE——"model"
+    // （默认）时绘制版四层（骨架连线/轮廓填充/光鞘缎带/标
+    // 志内线）在帧段乘 0 退场、模型在场；改回 "drawn" 即恢
+    // 复绘制版（旧代码一字未删，退路）。任一模型加载失败置
+    // zodiacModelFailed，帧段自动回落绘制版、不留空环。
+    // 星点（菱星节点/星芒/柔光晕）、宫名签、主星名签、环/
+    // 刻度是数据层与坐标层，不在替代范围、两模式都在场
+    const ZODIAC_FIG_MODE: "model" | "drawn" = "model";
+    let zodiacModelGroup: THREE.Group | null = null;
+    let zodiacModelFailed = false;
+    const zodiacModelMats: Array<{
+      mat: THREE.MeshStandardMaterial;
+      base: number;
+    }> = [];
     /** 月球轨道圈材质（随地球一同在行星序列里淡入） */
     let moonOrbitMat: THREE.LineBasicMaterial | null = null;
     // —— 月球：绕地小天体，位置逐帧按当前真实时刻的月球黄经
@@ -7805,7 +9052,19 @@ export function Globe({
     // 5° 短），宫名签在环内侧（纯文字、与行星标签同式）。十二
     // 宫在惯性系静止（岁差在本尺度忽略）。只随 sunFade 淡入淡
     // 出，不进命中表与标签避让系统——它是坐标框，不是天体。
+    // 2026-11-15 全站统一口径（用户令：与现实对齐）：环/刻度/
+    // 宫签/星座骨架/主星名签/狮影整体挂进黄道框组 zodiacFrame，
+    // 组按黄经岁差 ψ(构建时刻) 绕 Y 整体转——行星黄经（globeMath
+    // .planetLongitude 与 moonPhase 地心链出口）同加 ψ(t)，故
+    // 「行星站在哪个宫前 = 其黄经算出的宫」在新口径下继续恒等；
+    // 骨架在组内仍带 −24.2° Lahiri 偏移原样落位、随框同转，骨
+    // 架与宫的相对构图按构造零改动，全场净变化只有约 +0.36°
+    // 的整体转动。ψ 在会话内漂移 ~1e-7°，构建时取一次即可。
     {
+      const zodiacFrame = new THREE.Group();
+      zodiacFrame.rotation.y =
+        (eclipticPrecessionDeg(new Date()) * Math.PI) / 180;
+      solarGroup.add(zodiacFrame);
       const ZODIAC_R = 7.95 * SOLAR_S;
       const ringPts: THREE.Vector3[] = [];
       for (let i = 0; i < 256; i++) {
@@ -7824,7 +9083,7 @@ export function Globe({
         opacity: 0,
         depthWrite: false,
       });
-      solarGroup.add(
+      zodiacFrame.add(
         new THREE.LineLoop(
           new THREE.BufferGeometry().setFromPoints(ringPts),
           zodiacRingMat,
@@ -7854,7 +9113,7 @@ export function Globe({
         opacity: 0,
         depthWrite: false,
       });
-      solarGroup.add(new THREE.LineSegments(tickGeo, zodiacTickMat));
+      zodiacFrame.add(new THREE.LineSegments(tickGeo, zodiacTickMat));
       for (let k = 0; k < 12; k++) {
         const a = ((k * 30 + 15) * Math.PI) / 180;
         const label = makeSolarLabel(
@@ -7868,42 +9127,175 @@ export function Globe({
           0,
           -Math.sin(a) * (ZODIAC_R - 0.4),
         );
-        solarGroup.add(label);
+        zodiacFrame.add(label);
         zodiacLabels.push(label);
       }
-      // —— 十二星座骨架连线·极简星图（参考图三度重做的风格
-      // 层 + 本轮几何真实化，用户：「黄道十二宫的星座骨架，
-      // 以狮子座为参照样板」）——风格语言取自金色黄道轮盘
-      // 海报与极简星图的共性：① 全图单色——淡奶金一色，
-      // 线/星/签全是它，无辉光、无渐变、无粗细变化，克制
-      // 即高级感；② 节点是小五角星形字形（精灵纹理），按
-      // 星等分三档大小，每宫最亮 1–2 颗另配一枚小四角星
-      // 芒；③ 线为发丝级均匀细线、恒定不透明度、直段相
-      // 连；不设扇形衬底与任何框。门控不变：只在太阳系全
-      // 览显示（animate 的 zodiacFigK）。
-      // 几何纪律（本轮改回真实，撤销上一轮的宫内规整）：
-      // 连线跟随真实星点——每星以其真实黄经、黄纬落位，
-      // 唯一加工是恒星黄道对齐：全部节点黄经统一西移岁差
-      // 差值 ZODIAC_PRECESS_DEG = 24.2°（回归黄道与恒星黄
-      // 道当下差值的通行 Lahiri 口径值），图形落回自己名
-      // 字的宫。上一轮的经向缩放（以宫心为中心缩到扇区
-      // 75%）、纬向绕纬中点缩放、±11° 夹取全部取消；纬度
-      // ×0.38 旧压扁口径亦早已作废。图形以自然尺度落在环
-      // 带，允许像参考图那样略探出环带；本轮无一颗星被移
-      // 动位置——坐标管线与环/行星同源（pOf 同式），仅整
-      // 体平移。样板狮子座：镰刀 ε→μ→ζ→γ→η→α（α 轩辕
-      // 十四）按通行星图标准走法 + 躯干三角 δ 西次相→θ
-      // 西上相→β 五帝座一、补 β→δ 收束边成闭合三角；其
-      // 余十一宫以同一把标尺走各自真实亮星骨架（通行西方
-      // 连线集的亮星子集，与前轮同一出处）。宫环/宫签/
-      // 行星落位是回归黄道口径、一字不动；主星中文名签
-      // 沿用（同色奶金小字、贴主星，落位走同一真实坐标、
-      // 与节点恒同点）。逐宫节点数：白羊 5、金牛 7、双子
-      // 9、巨蟹 5、狮子 9、室女 7、天秤 5、天蝎 10、人马
-      // 7、摩羯 6、宝瓶 8、双鱼 10（合计 88 星，与上一轮
-      // 相同——增减为零，本轮只改几何不改星表）。绘制账：
-      // 3 次（线 1 + 星形节点 1 + 星芒 1）；不可点、不进
-      // 命中表与标签避让——与环同性质。
+      // —— 十二宫 3D 水晶模型落位（2026-11-16 元灿工单，
+      // 开关与退路见声明段 zodiacModelMats 处注）：挂
+      // zodiacFrame（随岁差框同转、与环/宫签相对构图恒
+      // 定），门控与绘制版图形同走 zodiacFigVis（帧段）。
+      // 朝向统一规则（十二宫一律，不许一宫一样）：模型是
+      // XY 平面浮雕（正面 +Z、厚 ±0.03）——**躺入环平面作
+      // 浮雕**：正面朝上（+Z → 世界 +Y）、图形上方（模型
+      // +Y）径向朝外（背离太阳，如表盘浮雕章），模型 +X
+      // 指向黄经递减方向（由右手系唯一确定）；全览 35° 斜
+      // 视下正面即读形面。落位 = 现 30° 单元格中心（λ =
+      // 30k+15°、与宫签同式）、环半径 ZODIAC_R、平面抬
+      // +0.03（压环线之上、不与刻度共面闪烁）；尺寸归一：
+      // 包围盒最大边 → 2.0 世界单位（宫格弧宽约 2.58，留
+      // 边不侵邻宫），按包围盒中心对位（个别宫原点偏移、
+      // 如人马 x∈[0.04,0.83]，不对位会偏格）。
+      // 材质口径（元灿 02:10 补充令）：保留作者原案的普
+      // 通 alpha 混合（Crystal alphaMode BLEND、α=0.34），
+      // **不改 transmission 折射**（多一遍场景渲染、WebView
+      // 又重又不稳）；元素色一字不改；自发光只微提 Crystal
+      // 一件：emissiveIntensity 1 → 2.8（其 emissive 本色 =
+      // 元素色 ×0.12，提后等效 ×0.34——水晶在暗背景读得出
+      // 形、仍是半透明，不提成实心）；StarLight 件原样（自
+      // 发光已满幅）。初值 2.2 探针帧下牌体偏灰、元素色读
+      // 不出，复核后定 2.8（等效 ×0.34 本色，仍远低于提成
+      // 实心的量级）。透明度基值登记 zodiacModelMats、帧段
+      // 按 zodiacFigVis 淡变（加载完成一宫亮一宫、随在位
+      // 系数平滑，不硬跳）。
+      // 遮挡如实：牌面（约 2.0 × 至多约 1.9 wu、厚约 0.07）
+      // 立在环面之上，落在牌面投影内、低黄纬的骨架星点会
+      // 被牌体半遮（星点在环圆柱面 y=R·tanβ、牌面在其外
+      // 侧上方）——星点与名签保留在场、遮挡限于牌面正后方
+      // 的少数中心星，逐帧深度关系照实渲染、不作假提升。
+      if (ZODIAC_FIG_MODE === "model") {
+        const modelGroup = new THREE.Group();
+        zodiacFrame.add(modelGroup);
+        zodiacModelGroup = modelGroup;
+        const gltfLoader = new GLTFLoader();
+        ZODIAC_MODEL_URLS.forEach((url, k) => {
+          gltfLoader.load(
+            url,
+            (gltf) => {
+              const scene = gltf.scene;
+              const box = new THREE.Box3().setFromObject(scene);
+              const size = new THREE.Vector3();
+              const center = new THREE.Vector3();
+              box.getSize(size);
+              box.getCenter(center);
+              const maxDim = Math.max(size.x, size.y);
+              if (!(maxDim > 0)) {
+                zodiacModelFailed = true;
+                return;
+              }
+              const s = 2.0 / maxDim;
+              scene.scale.setScalar(s);
+              scene.position.set(
+                -center.x * s,
+                -center.y * s,
+                -center.z * s,
+              );
+              const holder = new THREE.Group();
+              holder.add(scene);
+              const lam = ((k * 30 + 15) * Math.PI) / 180;
+              const cl = Math.cos(lam);
+              const sl2 = Math.sin(lam);
+              holder.position.set(
+                cl * ZODIAC_R,
+                0.03,
+                -sl2 * ZODIAC_R,
+              );
+              const basis = new THREE.Matrix4().makeBasis(
+                new THREE.Vector3(sl2, 0, cl),
+                new THREE.Vector3(cl, 0, -sl2),
+                new THREE.Vector3(0, 1, 0),
+              );
+              holder.quaternion.setFromRotationMatrix(basis);
+              scene.traverse((obj) => {
+                const mesh = obj as THREE.Mesh;
+                if (!mesh.isMesh) return;
+                const mats = Array.isArray(mesh.material)
+                  ? mesh.material
+                  : [mesh.material];
+                for (const m of mats) {
+                  const sm = m as THREE.MeshStandardMaterial;
+                  if (typeof sm.opacity !== "number") continue;
+                  if ((sm.name ?? "").startsWith("Crystal")) {
+                    sm.emissiveIntensity = 2.8;
+                  }
+                  sm.transparent = true;
+                  zodiacModelMats.push({ mat: sm, base: sm.opacity });
+                }
+              });
+              modelGroup.add(holder);
+            },
+            undefined,
+            () => {
+              zodiacModelFailed = true;
+            },
+          );
+        });
+      }
+// —— 十二星座图形·美术全量重构（2026-11-15 夜，用户
+// 真机裁决「这个星座能全部重构吗，美术设计太难看了」
+// ——上一轮「加厚」是在旧设计上补营养，本轮设计语言
+// 推倒重来；骨头不动、皮全换）——
+// 古典星图（Bayer《Uranometria》
+// 1603 / Hevelius 1690 / Stellarium 星座艺术层）的通
+// 法：形象不是盖在星点上的插画——亮星本身就是形象的
+// 解剖地标（眼、角尖、关节、心），轮廓线是连续的雕
+// 版式曲线、贴着地标走，星点嵌在线上与关节处；填充
+// 只是极淡的水洗，形象靠线读。现代天文海报（真实星
+// 表口径的星座海报一系）则反面立规：剪影画得越像卡
+// 通、离真实星形越远；可读性来自发光线带 + 节点星
+// 芒的主次分层与全系列一致的线权。旧版三宗罪正对着
+// 这两条：凸包式团块轮廓（形象被包没了）、1px 发丝
+// 线（没有线权）、平涂填充（没有层次）。
+// ① 线条性
+// 格只选一种：流畅曲线——闭合 Catmull-Rom 平滑（每
+// 段 10 采样），特征尖（角尖/螯尖/尾刺/箭头）靠控
+// 制点密置保尖，不用几何折线；② 轮廓从骨架长出
+// 来：新轮廓全部改「形体贴合」——不再画凸包团块，
+// 而是贴着骨架脊线走的凹形剪影（蝎是沿脊线的缎带
+// 形、双鱼是 V 形索带连两条鱼、双子是两根并立人
+// 柱、天秤的外形本身就是衡器），每宫的标志部位
+// （狮鬃、牛角、蟹螯、人马弓、摩羯鱼尾卷、宝瓶水
+// 流）做成轮廓上的解剖学突起；③ 每宫再加 1–3 条
+// 「标志内线」（同语言细线：羊角螺旋、狮鬃弧、秤
+// 梁与吊索、弓弦与箭、尾节横纹、裙褶与麦穗、水波
+// 纹、双鱼索结……）——缩略图尺度下先读内线与剪影
+// 的合谋，再读细节；④ 填充与辉光四层：星云渐变填
+// 充（心亮边淡的着色器径向衰减，不再平涂）→ 宽光
+// 鞘（0.95°）→ 缎带光边（0.16° 半宽的实体亮带替
+// 代 1px 线，暖白芯）→ 轮廓内星尘（逐宫 16 粒、
+// 只落在剪影内）；⑤ 星点主次倒转归位：轮廓是主
+// 体，骨架线降为结构辅助（0.38），骨架星改「菱形
+// 星芒 + 柔光晕」的珠宝式节点嵌在结构点上，名签
+// 不变。配色仍全图单色奶金一家（系列感靠同色同
+// 线权，不靠逐宫彩虹）。让位原则照旧：靠层次与透
+// 明度让位，不靠饿瘦；常驻条款照旧：不为性能削
+// 视觉。轮廓与内线均为艺术诠释层（坐标锚骨架星、
+// 定性记 DATA-PLAN），不冒充天文数据。
+// 几何纪律（沿用，不动）：星表坐标仍为真值
+// （J2000 赤道坐标离线换算的黄经/黄纬），落
+      // 位先统一减恒星黄道对齐 ZODIAC_PRECESS_DEG = 24.2°
+      // （Lahiri 口径，随 zodiacFrame 的 ψ(t) 同转、落宫恒
+      // 等不经此层），再逐宫做一宫一格适配 fitPt：取骨架
+      // 星 + 轮廓点并集的经度跨度，跨度 >28° 时等比缩小
+      // （λ、β 同一系数——形状不拉扯，图形内三角形纵横比
+      // 保持真实角距比例），跨度中心平移到宫心（30k+15°），
+      // 每宫图形经度跨度 ≤28°、恒在自己 30° 宫格内、与邻
+      // 座互不重叠；跨度 ≤28° 的宫只平移不缩放、黄纬用真
+      // 值不压缩不夹取（纬向旧 ×0.38 压扁口径早已作废，
+      // 本轮适配亦不引入任何各向异性缩放——用户观感「横
+      // 向拉长」的根源即纬向压缩，此路堵死）。适配只作用
+      // 于图形层（骨架/轮廓/名签同走一个 fitPt），宫环/
+      // 刻度/宫签/行星落位一字不动。样板狮子座：镰刀 ε→
+      // μ→ζ→γ→η→α（α 轩辕十四）按通行星图标准走法 + 躯
+      // 干三角 δ 西次相→θ 西上相→β 五帝座一、补 β→δ 收
+      // 束边成闭合三角；其余十一宫以同一把标尺走各自真实
+      // 亮星骨架（通行西方连线集的亮星子集，与前轮同一出
+      // 处）。逐宫节点数：白羊 5、金牛 7、双子 9、巨蟹 5、
+      // 狮子 9、室女 7、天秤 5、天蝎 10、人马 7、摩羯 6、
+      // 宝瓶 8、双鱼 10（合计 88 星，星表零增减）。绘制账
+      // （重构轮）：骨架 4 次（线 1 + 菱星节点 1 + 星芒 1
+      // + 柔光晕 1）+ 轮廓逐宫 4 次（渐变填充 1 + 光鞘 1
+      // + 缎带光边 1 + 标志内线 1）×12 + 星尘 1 次；不
+      // 可点、不进命中表与标签避让——与环同性质。
       const ZODIAC_FIGS: Array<{
         /** [黄经°, 黄纬°, 星等]，由 J2000 赤道坐标离线换算；
          * 骨架为通行西方连线集的亮星子集（主星链，坐标为
@@ -7929,6 +9321,184 @@ export function Globe({
       ];
       {
         const ZODIAC_PRECESS_DEG = 24.2;
+        // —— 十二宫轮廓控制点（2026-11-15 夜重构轮全量重
+        // 绘：形体贴合剪影，旧凸包团块点位全部作废）——坐
+        // 标与骨架星表同一空间（黄经° = 星表口径、落位同
+        // 减 24.2° 对齐 + 同走 fitPt 适配；黄纬°真值），
+        // 逐宫形象与其第一眼读法：白羊侧面羊（西头、角作
+        // 头顶卷突、身向东、腹下双腿凹口）、金牛牛头（西
+        // 面即毕宿 V、双角尖分指东北/东南两角星）、双子
+        // 双柱人形（东北双头双圆、双身斜垂西南、中央交
+        // 握）、巨蟹蟹（北螯与东螯各带钳口凹、南缘三对足
+        // 锯齿）、狮子侧面狮（西鬃波浪轮、身向东、尾东端
+        // 上钩、腹下双足凹口）、室女长裙女（北头、东北臂、
+        // 裙摆南展至角宿一、裙裾波浪）、天秤衡器（外形即
+        // 器物：顶钮、横梁、双盘凹、立柱、底座）、天蝎缎
+        // 带蝎（沿骨架脊线的窄带形：西双螯、身过心宿二、
+        // 尾向东南垂落后北卷、尾刺成尖刺突起）、人马半人
+        // 马射手（西弓作细长弓臂突、东马身、腹下双蹄凹
+        // 口）、摩羯海山羊（西羊头角突、东身、东南鱼尾
+        // 卷）、宝瓶泻流人（北人形持壶、南东水流成波浪
+        // 瓣、整体 L 形）、双鱼 V 索双鱼（西鱼竖立、索带
+        // 斜贯、东鱼竖立，V 内侧留空不填）。平滑/填充/
+        // 光边工艺见下方轮廓构建段。
+        const ZODIAC_OUTLINES: Array<Array<[number, number]>> = [
+          // 白羊：侧面羊（头西、角卷突、双腿凹口）
+          [[31.6, 3.8], [32.2, 6.8], [33.4, 9.8], [35.2, 12.6], [38.6, 13.4], [40.2, 11.4], [39.0, 9.6], [42.5, 11.8], [47.5, 12.8], [51.8, 11.6], [53.0, 8.8], [52.2, 5.4], [50.6, 2.2], [48.9, 2.0], [48.6, 4.6], [46.8, 1.6], [43.5, 1.2], [41.8, 4.4], [40.2, 1.4], [38.4, 1.8], [36.0, 3.0], [33.2, 2.6]],
+          // 金牛：牛头（毕宿面、双角尖）
+          [[63.2, -6.6], [63.8, -3.0], [65.2, 0.8], [68.0, 3.4], [72.0, 4.2], [77.5, 6.0], [83.6, 6.9], [78.0, 3.4], [75.0, 1.2], [77.0, -0.6], [82.0, -0.8], [85.9, -1.9], [84.6, -4.2], [79.0, -6.4], [72.0, -8.8], [66.0, -8.6], [63.6, -8.0]],
+          // 双子：双柱人形（双头、双身斜垂、中央交握）
+          [[109.0, 12.6], [111.8, 13.2], [113.0, 11.0], [112.6, 9.2], [113.4, 12.4], [116.0, 12.0], [116.6, 9.6], [114.8, 5.0], [112.6, 0.0], [110.0, -4.0], [108.6, -6.4], [106.4, -5.6], [105.2, -1.6], [106.8, 3.0], [105.6, 4.6], [102.0, 0.0], [99.6, -4.6], [97.6, -7.6], [95.8, -5.8], [96.8, -1.8], [92.6, -1.4], [94.6, 1.8], [98.6, 3.4], [101.6, 6.8], [104.8, 9.6], [107.2, 11.2]],
+          // 巨蟹：蟹（双螯钳口、南足锯齿）
+          [[122.6, -3.4], [121.8, 1.6], [123.0, 6.0], [123.8, 11.8], [125.8, 10.2], [126.2, 12.6], [128.4, 9.8], [130.6, 7.6], [133.8, 8.6], [134.6, 5.8], [136.8, 7.2], [136.4, 3.4], [135.4, -0.6], [136.2, -4.8], [133.6, -5.4], [134.0, -8.8], [131.2, -8.2], [130.6, -11.8], [128.0, -9.6], [126.0, -12.2], [124.4, -9.0], [122.2, -9.8], [122.0, -6.2]],
+          // 狮子：侧面狮（鬃波浪轮、尾上钩、双足凹口）
+          [[138.6, 5.2], [138.2, 8.6], [139.6, 11.6], [141.8, 13.8], [144.6, 15.2], [147.8, 15.6], [150.6, 14.6], [153.8, 14.8], [158.0, 15.4], [163.0, 16.0], [168.0, 16.2], [172.6, 17.0], [175.8, 19.4], [176.8, 16.8], [174.2, 15.0], [172.6, 12.4], [169.0, 9.6], [168.2, 6.0], [165.8, 5.2], [164.6, 8.6], [160.0, 5.6], [155.0, 4.6], [150.2, 1.2], [147.6, 0.8], [146.8, 4.2], [144.0, 3.2], [141.6, 3.6]],
+          // 室女：长裙女（北头、裙摆至角宿一、裙褶）
+          [[184.6, 13.4], [185.8, 17.0], [188.6, 18.2], [190.2, 15.4], [193.6, 16.4], [192.0, 12.6], [196.8, 10.8], [204.2, 9.0], [200.6, 5.2], [205.8, 0.6], [205.2, -3.6], [198.0, -4.8], [190.0, -4.4], [182.0, -2.8], [176.2, -0.6], [175.8, 2.6], [179.0, 5.6], [182.6, 8.6], [184.0, 10.6]],
+          // 天秤：衡器（顶钮、横梁、双盘、立柱、底座）
+          [[230.2, 11.6], [231.6, 9.8], [236.6, 7.0], [236.2, 4.8], [234.8, 2.4], [237.0, 0.2], [236.0, -2.6], [233.2, -3.6], [232.4, -1.4], [231.8, -3.8], [232.6, -6.4], [234.2, -8.6], [233.4, -10.6], [227.0, -10.6], [226.2, -8.6], [228.4, -6.2], [229.0, -3.6], [227.6, -1.4], [226.4, -3.8], [223.6, -2.8], [222.8, 0.0], [225.0, 2.4], [223.6, 4.8], [223.2, 7.2], [228.4, 9.8]],
+          // 天蝎：缎带蝎（沿脊线窄带、双螯、尾刺尖突）
+          [[241.4, 3.4], [244.0, 2.2], [246.0, -1.6], [249.6, -2.2], [252.6, -3.8], [253.4, -4.8], [255.6, -9.6], [257.9, -14.2], [261.5, -17.8], [265.2, -19.6], [266.6, -16.5], [265.5, -21.5], [262.5, -22.3], [257.5, -21.8], [254.3, -16.7], [252.4, -9.8], [251.0, -7.6], [247.6, -6.8], [244.8, -6.9], [242.2, -6.4], [240.6, -4.0], [242.4, -2.2], [241.0, -0.6]],
+          // 人马：半人马射手（西弓细突、马身、双蹄凹口）
+          [[269.0, -0.8], [267.8, -4.0], [268.6, -7.4], [270.2, -10.6], [271.4, -6.4], [272.6, -4.0], [276.0, -0.2], [278.6, 0.6], [281.0, -0.8], [284.8, -1.6], [286.0, -4.2], [285.6, -7.6], [284.8, -11.0], [282.8, -11.6], [281.8, -8.4], [278.0, -9.4], [276.2, -12.6], [273.8, -12.2], [272.8, -9.2], [273.4, -8.4], [271.2, -8.2], [271.8, -11.4], [268.0, -11.8], [267.6, -7.6], [267.5, -4.2]],
+          // 摩羯：海山羊（羊头角突、鱼尾卷）
+          [[301.6, 2.2], [302.2, 5.4], [303.6, 8.8], [306.0, 9.6], [307.2, 7.2], [309.0, 5.4], [313.0, 3.4], [318.0, 2.2], [322.6, 1.2], [325.8, -0.4], [326.4, -3.6], [323.6, -4.2], [322.0, -7.6], [319.0, -9.6], [315.8, -7.8], [313.0, -4.6], [308.0, -3.0], [305.8, -4.8], [304.0, -5.2], [303.4, -2.4], [301.8, -0.4]],
+          // 宝瓶：泻流人（北人形持壶、水流波浪瓣、L 形）
+          [[310.2, 6.4], [311.0, 10.2], [314.0, 11.4], [316.0, 9.2], [320.0, 10.0], [324.0, 11.2], [328.0, 10.8], [331.6, 13.0], [335.0, 13.4], [338.6, 12.2], [341.8, 10.8], [342.6, 6.0], [340.8, 1.0], [342.2, -3.4], [340.6, -8.0], [339.8, -10.8], [336.8, -9.2], [334.6, -11.0], [332.8, -8.6], [334.0, -3.0], [332.6, 1.6], [334.2, 5.6], [328.0, 4.6], [322.0, 3.2], [316.0, 3.8], [312.0, 3.4]],
+          // 双鱼：V 索双鱼（西鱼竖立、索带斜贯、东鱼竖立，V 内留空；东鱼经度已解卷绕 +360°）
+          [[353.0, 11.6], [357.8, 10.4], [363.8, 7.2], [362.4, 3.6], [366.0, 3.4], [374.0, 1.6], [382.0, -0.6], [383.8, 5.0], [386.2, 12.2], [389.2, 10.6], [391.6, 3.4], [390.6, -3.4], [389.4, -9.6], [386.0, -10.2], [383.4, -7.8], [375.0, -5.2], [366.0, -2.8], [353.6, 1.4], [350.2, 4.0], [350.4, 8.0]],
+        ];
+        // —— 十二宫标志内线（重构轮新增，与轮廓同一坐标
+        // 口径、同走 fitPt）：每宫 1–3 条签名细线，是缩略
+        // 图尺度下形象可辨的第二通道——白羊角螺旋、金牛
+        // 毕宿 V、双子双头圆 + 交握臂、巨蟹甲壳弧 + 螯
+        // 内线、狮子鬃内镰弧、室女裙褶两线 + 麦穗线（至
+        // 角宿一）、天秤梁/柱/四吊索、天蝎尾节横纹两道
+        // + 心宿弧、人马弓弧/弦/箭、摩羯角弧 + 尾鳍射
+        // 线、宝瓶三道水波、双鱼索结圆。坐标为艺术诠释
+        // （锚骨架星位），非天文数据。
+        const ZODIAC_DETAILS: Array<
+          Array<Array<[number, number]>>
+        > = [
+          // 白羊：角螺旋 + 耳线
+          [
+            [[35.0, 10.0], [35.4, 12.0], [37.4, 12.8], [38.8, 11.6], [38.2, 10.0], [36.6, 9.8]],
+            [[39.4, 9.4], [41.2, 8.2]],
+          ],
+          // 金牛：毕宿 V（两臂）
+          [
+            [[65.86, -5.41], [66.87, -3.97], [68.46, -2.57]],
+            [[66.87, -3.97], [68.02, -5.85]],
+          ],
+          // 双子：双头圆（六点近似）+ 交握臂
+          [
+            [[111.94, 10.9], [111.09, 12.37], [109.39, 12.37], [107.54, 10.9], [108.39, 9.43], [109.39, 9.43], [111.94, 10.9]],
+            [[115.6, 7.6], [114.75, 9.07], [113.05, 9.07], [112.2, 7.6], [113.05, 6.13], [114.75, 6.13], [115.6, 7.6]],
+            [[107.8, 7.8], [110.8, 6.0]],
+          ],
+          // 巨蟹：甲壳弧 + 北螯内线
+          [
+            [[124.6, -1.8], [128.6, 1.6], [132.4, -1.4]],
+            [[125.4, 9.6], [127.0, 6.8]],
+          ],
+          // 狮子：鬃内镰弧（沿镰刀星链内侧）
+          [
+            [[141.8, 6.8], [143.8, 10.6], [147.2, 12.2], [149.9, 9.2], [149.7, 4.8]],
+          ],
+          // 室女：裙褶两线 + 麦穗线
+          [
+            [[192.0, 5.6], [190.2, -3.2]],
+            [[196.6, 4.6], [197.6, -3.8]],
+            [[198.6, 1.2], [201.2, -0.6], [203.84, -2.05]],
+          ],
+          // 天秤：梁 + 立柱 + 四吊索
+          [
+            [[224.2, 6.7], [235.6, 6.7]],
+            [[230.9, 9.2], [230.9, -8.2]],
+            [[226.2, 6.5], [224.6, 0.4]],
+            [[226.2, 6.5], [228.8, 0.2]],
+            [[233.6, 6.5], [232.4, 0.0]],
+            [[233.6, 6.5], [236.0, -0.2]],
+          ],
+          // 天蝎：尾节横纹两道 + 心宿弧
+          [
+            [[254.0, -12.6], [257.2, -13.4]],
+            [[255.6, -16.8], [260.4, -17.6]],
+            [[264.8, -19.6], [267.2, -15.6]],
+            [[248.0, -3.2], [249.76, -2.7], [251.4, -3.4]],
+          ],
+          // 人马：弓弧 + 弦 + 箭
+          [
+            [[269.9, -1.4], [268.7, -4.8], [270.6, -9.6]],
+            [[269.9, -1.4], [270.6, -9.6]],
+            [[277.2, -3.2], [267.4, -5.4]],
+          ],
+          // 摩羯：角弧 + 尾鳍射线
+          [
+            [[303.9, 8.0], [306.0, 8.6]],
+            [[323.2, -3.6], [320.6, -6.8]],
+          ],
+          // 宝瓶：三道水波
+          [
+            [[336.0, -1.0], [338.0, -0.2], [340.0, -1.0]],
+            [[335.6, -4.6], [337.6, -3.8], [339.6, -4.6]],
+            [[335.2, -8.0], [337.2, -7.2], [339.2, -8.0]],
+          ],
+          // 双鱼：索结圆（六点近似，结在索带中点）
+          [
+            [[375.1, -1.8], [374.55, -0.85], [373.45, -0.85], [372.9, -1.8], [373.45, -2.75], [374.55, -2.75], [375.1, -1.8]],
+          ],
+        ];
+
+        // —— 一宫一格适配 fitPt（本轮几何纪律，见上方总注）：
+        // 逐宫并集跨度 → 等比系数 s（>28° 才缩）+ 跨度中心
+        // （λ/β 各自）→ 宫心。适配是 (λ,β) 平面内的仿射变换
+        // （等比缩放 + 平移），与 Catmull-Rom 平滑可交换、
+        // 与骨架/轮廓/名签共用同一份，形状与纵横比不失真。
+        const FIT_W = 28;
+        interface FigFit {
+          s: number;
+          lamMid: number;
+          betaMid: number;
+          cellC: number;
+        }
+        const unwrapNear = (lam: number, ref: number): number => {
+          let v = lam;
+          while (v - ref > 180) v -= 360;
+          while (v - ref < -180) v += 360;
+          return v;
+        };
+        const figFits: FigFit[] = ZODIAC_FIGS.map((fig, k) => {
+          const ref = fig.stars[0]![0] - ZODIAC_PRECESS_DEG;
+          const lams: number[] = [];
+          const betas: number[] = [];
+          for (const st of fig.stars) {
+            lams.push(unwrapNear(st[0] - ZODIAC_PRECESS_DEG, ref));
+            betas.push(st[1]);
+          }
+          for (const pt of ZODIAC_OUTLINES[k]!) {
+            lams.push(unwrapNear(pt[0] - ZODIAC_PRECESS_DEG, ref));
+            betas.push(pt[1]);
+          }
+          const lamMin = Math.min(...lams);
+          const lamMax = Math.max(...lams);
+          const span = lamMax - lamMin;
+          return {
+            s: span > FIT_W ? FIT_W / span : 1,
+            lamMid: (lamMin + lamMax) / 2,
+            betaMid:
+              (Math.min(...betas) + Math.max(...betas)) / 2,
+            cellC: k * 30 + 15,
+          };
+        });
+        const fitPt = (
+          fit: FigFit,
+          lamF: number,
+          beta: number,
+        ): [number, number] => [
+          fit.cellC + (lamF - fit.lamMid) * fit.s,
+          fit.betaMid + (beta - fit.betaMid) * fit.s,
+        ];
         // 淡奶金：全图唯一色（线/节点/星芒/名签同色同源）
         const FIG_GOLD: [number, number, number] = [0.93, 0.85, 0.64];
         // 落位：λ 为最终黄经（调用方已统一减恒星黄道平移，
@@ -7952,22 +9522,27 @@ export function Globe({
           [];
         for (let figIdx = 0; figIdx < ZODIAC_FIGS.length; figIdx++) {
           const fig = ZODIAC_FIGS[figIdx]!;
-          // 真实化落位（本轮）：黄经只统一减岁差平移（恒星
-          // 黄道对齐、落回本宫，双鱼跨 0° 先解卷绕），黄纬
-          // 用真值——上一轮的宫心缩放（扇区 75%）、纬向绕
-          // 纬中点缩放与 ±11° 夹取全部撤销，本轮无一颗星
-          // 被移动位置：pOf 与环/行星同式，星表坐标即落位
-          // 坐标（仅整体平移 −24.2°）
-          const lamMax0 = Math.max(...fig.stars.map((s) => s[0]));
+          // 落位（本轮）：黄经先统一减岁差平移（恒星黄道对
+          // 齐，双鱼跨 0° 先解卷绕），再走本宫 fitPt 一宫一
+          // 格适配（等比 + 居中，见 figFits 处注）；黄纬在
+          // s=1 的宫用真值、s<1 的宫随同一系数等比——全程
+          // 无各向异性缩放。pOf 与环/行星同式。
+          const fit = figFits[figIdx]!;
+          const refLam = fig.stars[0]![0] - ZODIAC_PRECESS_DEG;
           const stars = fig.stars.map((star) => {
             const mag = star[2];
-            const lamU =
-              star[0] < lamMax0 - 180 ? star[0] + 360 : star[0];
+            const lamU = unwrapNear(
+              star[0] - ZODIAC_PRECESS_DEG,
+              refLam,
+            );
+            const [fl, fb] = fitPt(fit, lamU, star[1]);
             return {
-              p: pOf(lamU - ZODIAC_PRECESS_DEG, star[1]),
-              // 星形节点三档（按星等）：≤1.6 大 / ≤2.7 中 /
-              // 其余小——至多三档，不再连续渐变
-              size: mag <= 1.6 ? 0.34 : mag <= 2.7 ? 0.25 : 0.18,
+              p: pOf(fl, fb),
+              // 菱星节点三档（按星等）：≤1.6 大 / ≤2.7 中 /
+              // 其余小——至多三档，不再连续渐变。尺寸口径：
+              // 重构轮珠宝档 0.40/0.30/0.22（节点是嵌在结构
+              // 点上的宝石，须在缩略图尺度可读）
+              size: mag <= 1.6 ? 0.4 : mag <= 2.7 ? 0.3 : 0.22,
               mag,
             };
           });
@@ -7986,7 +9561,8 @@ export function Globe({
             if (k === 1 && stars[si]!.mag > 2.8) break;
             const s = stars[si]!;
             sparkPos.push(s.p[0], s.p[1], s.p[2]);
-            sparkSize.push(0.52);
+            // 星芒尺寸 0.62（重构轮：主星芒是全宫最亮的点）
+            sparkSize.push(0.62);
           }
           for (const [ea, eb] of fig.edges) {
             const sa = stars[ea]!;
@@ -7997,8 +9573,10 @@ export function Globe({
             );
           }
         }
-        // ① 发丝线：单色奶金、恒定不透明度（animate 给
-        // 0.9 × 可见度）、无顶点色、无沿线渐隐
+        // ① 骨架线：单色奶金、恒定不透明度（animate 给
+        // 0.38 × 可见度——重构轮主次归位：骨架是结构辅
+        // 助，轮廓缎带与内线是主体；靠分层让位不靠饿瘦，
+        // 线本身不断、不虚化）、无顶点色、无沿线渐隐
         const figGeo = new THREE.BufferGeometry();
         figGeo.setAttribute(
           "position",
@@ -8010,11 +9588,16 @@ export function Globe({
           opacity: 0,
           depthWrite: false,
         });
-        solarGroup.add(new THREE.LineSegments(figGeo, zodiacFigMat));
-        // ②③ 星形节点 / 四角星芒：字形精灵纹理（canvas 画
-        // 五角星 / 四角星芒，白色填充、alpha 即字形），着色
-        // 器只做一件事——按纹理 alpha 乘单色奶金与门控淡变；
-        // 静态呈现：无闪烁、无呼吸、无辉光层
+        zodiacFrame.add(new THREE.LineSegments(figGeo, zodiacFigMat));
+        // ②③ 菱星节点 / 四角星芒：字形精灵纹理（canvas 画
+        // 四角菱星——重构轮废除五角星形（读作「贴纸星」、
+        // 与古典星图的星芒语言不合），节点与星芒同形不同
+        // 尺寸：节点短芒、主星长芒；白色填充 + shadowBlur
+        // 辉光、alpha 即字形），着色器只做一件事——按纹
+        // 理 alpha 乘单色奶金与门控淡变；静态呈现：无闪
+        // 烁、无呼吸。另有 ②½ 柔光晕（径向渐变圆纹理、
+        // 节点尺寸 ×2.8、峰值 0.32）垫在每颗节点下——星
+        // 点的体积靠晕 + 芒两层，不靠加大字形本身
         const makeGlyphTexture = (
           sparkle: boolean,
         ): THREE.Texture => {
@@ -8025,26 +9608,24 @@ export function Globe({
           g.clearRect(0, 0, 128, 128);
           g.fillStyle = "#ffffff";
           g.shadowColor = "rgba(255,255,255,0.85)";
-          g.shadowBlur = 4;
+          // 字形自带辉光（blur 5）：星点靠自身光晕撑体积
+          // （纠正单：旧「收薄到 2」条款作废）
+          g.shadowBlur = 5;
           g.beginPath();
-          if (sparkle) {
-            const pts: Array<[number, number]> = [
-              [64, 2], [75, 53], [126, 64], [75, 75],
-              [64, 126], [53, 75], [2, 64], [53, 53],
-            ];
-            pts.forEach(([x, y], i) =>
-              i === 0 ? g.moveTo(x, y) : g.lineTo(x, y),
-            );
-          } else {
-            for (let i = 0; i < 10; i++) {
-              const r = i % 2 === 0 ? 58 : 23;
-              const a = -Math.PI / 2 + (i * Math.PI) / 5;
-              const x = 64 + r * Math.cos(a);
-              const y = 64 + r * Math.sin(a);
-              if (i === 0) g.moveTo(x, y);
-              else g.lineTo(x, y);
-            }
-          }
+          // 四角菱星：长芒（主星）芒长及边、腰窄；短芒
+          // （普通节点）同形缩芒——同一字形家族
+          const pts: Array<[number, number]> = sparkle
+            ? [
+                [64, 2], [72, 56], [126, 64], [72, 72],
+                [64, 126], [56, 72], [2, 64], [56, 56],
+              ]
+            : [
+                [64, 8], [74, 54], [120, 64], [74, 74],
+                [64, 120], [54, 74], [8, 64], [54, 54],
+              ];
+          pts.forEach(([x, y], i) =>
+            i === 0 ? g.moveTo(x, y) : g.lineTo(x, y),
+          );
           g.closePath();
           g.fill();
           const tex = new THREE.CanvasTexture(cv);
@@ -8074,7 +9655,7 @@ export function Globe({
               "uniform float uScaleH;",
               "void main() {",
               "  vec4 mv = modelViewMatrix * vec4(position, 1.0);",
-              "  gl_PointSize = clamp(aSize * uScaleH / max(0.05, -mv.z), 2.0, 96.0);",
+              "  gl_PointSize = clamp(aSize * uScaleH / max(0.05, -mv.z), 2.0, 72.0);",
               "  gl_Position = projectionMatrix * mv;",
               "}",
             ].join("\n"),
@@ -8101,7 +9682,7 @@ export function Globe({
           new THREE.Float32BufferAttribute(nodeSize, 1),
         );
         zodiacNodeMat = makeZodiacGlyphMat(makeGlyphTexture(false), 1);
-        solarGroup.add(new THREE.Points(nodeGeo, zodiacNodeMat));
+        zodiacFrame.add(new THREE.Points(nodeGeo, zodiacNodeMat));
         const sparkGeo = new THREE.BufferGeometry();
         sparkGeo.setAttribute(
           "position",
@@ -8111,8 +9692,44 @@ export function Globe({
           "aSize",
           new THREE.Float32BufferAttribute(sparkSize, 1),
         );
-        zodiacSparkMat = makeZodiacGlyphMat(makeGlyphTexture(true), 0.9);
-        solarGroup.add(new THREE.Points(sparkGeo, zodiacSparkMat));
+        zodiacSparkMat = makeZodiacGlyphMat(makeGlyphTexture(true), 1);
+        zodiacFrame.add(new THREE.Points(sparkGeo, zodiacSparkMat));
+        // ②½ 柔光晕 + 星尘共用径向渐变圆纹理（中心 1 →
+        // 边缘 0 的平滑衰减，alpha 即亮度）
+        const makeSoftTexture = (): THREE.Texture => {
+          const cv = document.createElement("canvas");
+          cv.width = 128;
+          cv.height = 128;
+          const g = cv.getContext("2d")!;
+          const grad = g.createRadialGradient(64, 64, 2, 64, 64, 62);
+          grad.addColorStop(0, "rgba(255,255,255,1)");
+          grad.addColorStop(0.35, "rgba(255,255,255,0.42)");
+          grad.addColorStop(1, "rgba(255,255,255,0)");
+          g.fillStyle = grad;
+          g.fillRect(0, 0, 128, 128);
+          const tex = new THREE.CanvasTexture(cv);
+          tex.colorSpace = THREE.SRGBColorSpace;
+          return tex;
+        };
+        const softTex = makeSoftTexture();
+        {
+          const haloGeo = new THREE.BufferGeometry();
+          haloGeo.setAttribute(
+            "position",
+            new THREE.Float32BufferAttribute(nodePos, 3),
+          );
+          haloGeo.setAttribute(
+            "aSize",
+            new THREE.Float32BufferAttribute(
+              nodeSize.map((s) => s * 2.8),
+              1,
+            ),
+          );
+          zodiacHaloMat = makeZodiacGlyphMat(softTex, 0.32);
+          const halo = new THREE.Points(haloGeo, zodiacHaloMat);
+          halo.renderOrder = -1;
+          zodiacFrame.add(halo);
+        }
         // ④ 主星名签（沿用名单）：每宫挑通行中文星名的主星
         // 挂一枚小字签——只挑星名与恒星本体确凿对应的（逐
         // 颗以黄经/黄纬/星等与骨架数据互验）：娄宿三（白羊
@@ -8165,62 +9782,78 @@ export function Globe({
               p[1] + 0.15,
               p[2] + (p[2] / rl) * 0.34,
             );
-            solarGroup.add(label);
+            zodiacFrame.add(label);
             zodiacStarLabels.push(label);
           }
         });
-        // ⑤ 狮子透明轮廓（2026-11-14 样板轮，用户：「给狮子加
-        // 透明轮廓」——本轮只做狮子一宫，其余十一宫不碰）：骨
-        // 架底下垫一层半透明狮影——侧面趴卧的狮子，头与鬃落在
-        // 镰刀处（ε/μ 为冠、ζ/γ 为鬃、α 轩辕十四在前腿/胸
-        // 口），前腿自镰刀下方垂落（沿 η→α 一带垂到环面之
-        // 下），身子顺黄经向东伸到躯干三角（δ 在背线下、θ 在
-        // 臀腹、β 五帝座一为尾根），尾巴在 β 附近上卷收束。
-        // 轮廓点以九颗骨架星为比例锚点、在（最终黄经°， 黄
-        // 纬°）平面内按狮形布点（下表坐标即最终黄经 = 星表
-        // 黄经 −24.2° 平移后口径），再走闭合 Catmull-Rom 平
-        // 滑成一条光滑闭合曲线——不是连星多边形、无锯齿。落
-        // 位与骨架同一管线（pOf：黄经含同一 −24.2° 平移、黄
-        // 纬真值），填充面元先在 (λ,β) 平面内三角化、再逐顶
-        // 点过 pOf 贴到与骨架同一圆柱面，自然尺度、可随骨架
-        // 略探出环带。风格同全图：单色奶金 FIG_GOLD、无辉光
-        // 无渐变，填充峰值 0.065、描边发丝峰值 0.30（animate
-        // 按 zodiacFigVis 同步，见 animate 段）；renderOrder
-        // 压到骨架之下——线/星形节点/星芒/名签恒在其上，不
-        // 遮挡、不降骨架可读性。门控与骨架一致（只在太阳系
-        // 全览）。绘制账：填充 1 笔 + 描边 1 笔；不可点、不
-        // 进命中表与标签避让。
-        {
-          // [最终黄经°, 黄纬°]，自鼻尖起顺时针：鼻→额→冠→
-          // 鬃顶→颈→背→臀→尾外缘→尾尖→尾内缘→尾根→臀后→
-          // 后腿→后爪→腹→胸→前爪→前腿→喉→颌下→口下→鼻
-          const LEO_OUTLINE: Array<[number, number]> = [
-            [114.8, 8.2], [115.8, 10.8], [117.0, 13.2],
-            [119.5, 14.6], [122.5, 14.9], [126.0, 13.6],
-            [129.0, 13.4], [133.0, 14.2], [137.5, 15.3],
-            [141.5, 15.4], [145.0, 15.2], [148.6, 16.8],
-            [151.0, 18.2], [150.2, 15.9], [147.6, 14.6],
-            [148.2, 11.6], [144.5, 9.0], [142.5, 6.2],
-            [141.0, 4.6], [136.8, 4.3], [138.6, 6.0],
-            [133.5, 5.0], [129.5, 4.4], [126.3, 2.8],
-            [125.8, -1.4], [120.0, -1.7], [119.6, 0.6],
-            [121.8, 3.4], [122.6, 5.9], [119.0, 6.4],
-            [115.9, 6.7],
-          ];
-          // 闭合 Catmull-Rom 平滑：控制点环形 wrap、每段 8 采
-          // 样，曲线过全部控制点、弧线过渡
-          const leoCurve: Array<[number, number]> = [];
-          const nP = LEO_OUTLINE.length;
+        // ⑤ 十二宫轮廓（重构轮全新管线，轮廓为图形主
+        // 体）：逐宫把 ZODIAC_OUTLINES 控制点走与骨架同一
+        // 条管线——同减 24.2° 对齐、同走本宫 fitPt 一宫一
+        // 格适配——再闭合 Catmull-Rom 平滑（控制点环形
+        // wrap、每段 10 采样，过全部控制点）。四层工艺
+        // （全宫统一）：(a) 星云渐变填充——ShapeGeometry
+        // 三角化后逐顶点算距本宫形心的归一化距离 aD，着
+        // 色器以 (1−aD)^1.6 衰减出心亮边淡的径向辉光、
+        // 颜色心暖边沉同在奶金家系内，替代旧平涂；(b) 宽
+        // 光鞘——沿曲线两侧各展 0.95°、中心 alpha 0.65
+        // 的加色三角带，是轮廓的光场；(c) 缎带光边——沿
+        // 曲线两侧各展 0.16° 的实体三角带、暖白芯色、峰
+        // 值 0.88，是轮廓的线权本体（替代 1px 发丝
+        // LineLoop：发丝在任何缩放下恒 1px，撑不起体
+        // 量）；(d) 标志内线——ZODIAC_DETAILS 逐宫签名细
+        // 线走开式 Catmull-Rom（端点复制补齐、每段 6 采
+        // 样）成 LineSegments，峰值 0.55。星尘在循环内逐
+        // 宫采样（确定性种子、拒斥采样只落平滑曲线围成
+        // 的剪影内、每宫 16 粒），循环后合成一个 Points。
+        // 分层 renderOrder：填充 −3 / 光鞘 −2 / 缎带与星
+        // 尘 −1 / 内线 0（骨架线与节点字形在其上）。门控
+        // 与骨架一致（只在太阳系全览）。绘制账：逐宫 4
+        // 笔 ×12 + 星尘 1 笔；不可点、不进命中表与标签
+        // 避让。
+        const dustPos: number[] = [];
+        const dustSize: number[] = [];
+        const pipTest = (
+          poly: Array<[number, number]>,
+          x: number,
+          y: number,
+        ): boolean => {
+          let c = false;
+          for (let a = 0, b = poly.length - 1; a < poly.length; b = a++) {
+            const pa = poly[a]!;
+            const pb = poly[b]!;
+            if (
+              pa[1] > y !== pb[1] > y &&
+              x < ((pb[0] - pa[0]) * (y - pa[1])) / (pb[1] - pa[1]) + pa[0]
+            ) {
+              c = !c;
+            }
+          }
+          return c;
+        };
+        for (let oi = 0; oi < ZODIAC_OUTLINES.length; oi++) {
+          const fit = figFits[oi]!;
+          const refLam =
+            ZODIAC_FIGS[oi]!.stars[0]![0] - ZODIAC_PRECESS_DEG;
+          const ctrl = ZODIAC_OUTLINES[oi]!.map((pt) => {
+            const lamU = unwrapNear(
+              pt[0] - ZODIAC_PRECESS_DEG,
+              refLam,
+            );
+            return fitPt(fit, lamU, pt[1]);
+          });
+          // 闭合 Catmull-Rom 平滑（每段 10 采样）
+          const curve: Array<[number, number]> = [];
+          const nP = ctrl.length;
           for (let i = 0; i < nP; i++) {
-            const p0 = LEO_OUTLINE[(i + nP - 1) % nP]!;
-            const p1 = LEO_OUTLINE[i]!;
-            const p2 = LEO_OUTLINE[(i + 1) % nP]!;
-            const p3 = LEO_OUTLINE[(i + 2) % nP]!;
-            for (let j = 0; j < 8; j++) {
-              const t = j / 8;
+            const p0 = ctrl[(i + nP - 1) % nP]!;
+            const p1 = ctrl[i]!;
+            const p2 = ctrl[(i + 1) % nP]!;
+            const p3 = ctrl[(i + 2) % nP]!;
+            for (let j = 0; j < 10; j++) {
+              const t = j / 10;
               const t2 = t * t;
               const t3 = t2 * t;
-              leoCurve.push([
+              curve.push([
                 0.5 *
                   (2 * p1[0] +
                     (-p0[0] + p2[0]) * t +
@@ -8234,60 +9867,1982 @@ export function Globe({
               ]);
             }
           }
-          // 填充：(λ,β) 平面 ShapeGeometry 三角化 → 逐顶点 pOf
-          const leoShape = new THREE.Shape(
-            leoCurve.map(([u, v]) => new THREE.Vector2(u, v)),
+          // 形心与最大半径（渐变填充的衰减标尺）
+          let cenU = 0;
+          let cenV = 0;
+          for (const p of curve) {
+            cenU += p[0];
+            cenV += p[1];
+          }
+          cenU /= curve.length;
+          cenV /= curve.length;
+          let maxD = 0.001;
+          for (const p of curve) {
+            maxD = Math.max(
+              maxD,
+              Math.hypot(p[0] - cenU, p[1] - cenV),
+            );
+          }
+          // (a) 星云渐变填充：(λ,β) 平面三角化 → 逐顶点
+          // 附 aD 并 pOf 贴同一圆柱面
+          const shape = new THREE.Shape(
+            curve.map(([u, v]) => new THREE.Vector2(u, v)),
           );
-          const leoFillGeo = new THREE.ShapeGeometry(leoShape);
+          const fillGeo = new THREE.ShapeGeometry(shape);
           {
-            const pos = leoFillGeo.getAttribute("position");
+            const pos = fillGeo.getAttribute("position");
+            const aD = new Float32Array(pos.count);
             for (let vi = 0; vi < pos.count; vi++) {
+              aD[vi] = Math.min(
+                1,
+                Math.hypot(pos.getX(vi) - cenU, pos.getY(vi) - cenV) /
+                  maxD,
+              );
               const p = pOf(pos.getX(vi), pos.getY(vi));
               pos.setXYZ(vi, p[0], p[1], p[2]);
             }
             pos.needsUpdate = true;
+            fillGeo.setAttribute(
+              "aD",
+              new THREE.BufferAttribute(aD, 1),
+            );
           }
-          zodiacLeoFillMat = new THREE.MeshBasicMaterial({
-            color: new THREE.Color(
-              FIG_GOLD[0],
-              FIG_GOLD[1],
-              FIG_GOLD[2],
-            ),
+          const fillMat = new THREE.ShaderMaterial({
+            uniforms: {
+              uFade: { value: 0 },
+              uCore: { value: new THREE.Color(1.0, 0.93, 0.72) },
+              uEdge: { value: new THREE.Color(0.6, 0.56, 0.46) },
+            },
+            vertexShader: [
+              "attribute float aD;",
+              "varying float vD;",
+              "void main() {",
+              "  vD = aD;",
+              "  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);",
+              "}",
+            ].join("\n"),
+            fragmentShader: [
+              "uniform float uFade;",
+              "uniform vec3 uCore;",
+              "uniform vec3 uEdge;",
+              "varying float vD;",
+              "void main() {",
+              "  float g = pow(1.0 - vD, 1.6);",
+              "  vec3 col = mix(uEdge, uCore, g);",
+              "  float a = (0.05 + 0.30 * g) * uFade;",
+              "  gl_FragColor = vec4(col, a);",
+              "}",
+            ].join("\n"),
             transparent: true,
-            opacity: 0,
             depthWrite: false,
             side: THREE.DoubleSide,
           });
-          const leoFill = new THREE.Mesh(leoFillGeo, zodiacLeoFillMat);
-          leoFill.renderOrder = -2;
-          solarGroup.add(leoFill);
-          // 描边：同一条平滑闭合曲线过 pOf 的发丝 LineLoop
-          const leoEdgePos: number[] = [];
-          for (const [u, v] of leoCurve) {
-            const p = pOf(u, v);
-            leoEdgePos.push(p[0], p[1], p[2]);
+          zodiacOutlineFillMats.push(fillMat);
+          const fill = new THREE.Mesh(fillGeo, fillMat);
+          fill.renderOrder = -3;
+          zodiacFrame.add(fill);
+          // 沿曲线建带状几何（光鞘/缎带共用）：(λ,β) 平面
+          // 内垂直于曲线切向、按 rows 给定的 [偏移系数,
+          // alpha] 逐行展开，逐顶点经 pOf 贴同一圆柱面
+          const stripGeo = (
+            halfW: number,
+            rows: Array<[number, number]>,
+          ): THREE.BufferGeometry => {
+            const sPos: number[] = [];
+            const sA: number[] = [];
+            const sIdx: number[] = [];
+            const nC = curve.length;
+            const nR = rows.length;
+            for (let ci = 0; ci < nC; ci++) {
+              const cpt = curve[ci]!;
+              const pv = curve[(ci + nC - 1) % nC]!;
+              const nx = curve[(ci + 1) % nC]!;
+              let tx = nx[0] - pv[0];
+              let ty = nx[1] - pv[1];
+              const tl = Math.hypot(tx, ty) || 1;
+              tx /= tl;
+              ty /= tl;
+              const px = -ty;
+              const py = tx;
+              for (const [off, al] of rows) {
+                const p = pOf(
+                  cpt[0] + px * halfW * off,
+                  cpt[1] + py * halfW * off,
+                );
+                sPos.push(p[0], p[1], p[2]);
+                sA.push(al);
+              }
+            }
+            for (let ci = 0; ci < nC; ci++) {
+              const a0 = ci * nR;
+              const b0 = ((ci + 1) % nC) * nR;
+              for (let r = 0; r < nR - 1; r++) {
+                sIdx.push(
+                  a0 + r, b0 + r, a0 + r + 1,
+                  b0 + r, b0 + r + 1, a0 + r + 1,
+                );
+              }
+            }
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute(
+              "position",
+              new THREE.Float32BufferAttribute(sPos, 3),
+            );
+            geo.setAttribute(
+              "aA",
+              new THREE.Float32BufferAttribute(sA, 1),
+            );
+            geo.setIndex(sIdx);
+            return geo;
+          };
+          // (b) 宽光鞘：0.95°、中心 alpha 0.65、加色混合
+          {
+            const sheathMat = new THREE.ShaderMaterial({
+              uniforms: {
+                uFade: { value: 0 },
+                uColor: {
+                  value: new THREE.Color(
+                    FIG_GOLD[0],
+                    FIG_GOLD[1],
+                    FIG_GOLD[2],
+                  ),
+                },
+              },
+              vertexShader: [
+                "attribute float aA;",
+                "varying float vA;",
+                "void main() {",
+                "  vA = aA;",
+                "  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);",
+                "}",
+              ].join("\n"),
+              fragmentShader: [
+                "uniform float uFade;",
+                "uniform vec3 uColor;",
+                "varying float vA;",
+                "void main() {",
+                "  gl_FragColor = vec4(uColor, vA * uFade);",
+                "}",
+              ].join("\n"),
+              transparent: true,
+              depthWrite: false,
+              blending: THREE.AdditiveBlending,
+              side: THREE.DoubleSide,
+            });
+            zodiacOutlineSheathMats.push(sheathMat);
+            const sheath = new THREE.Mesh(
+              stripGeo(0.95, [
+                [-1, 0],
+                [0, 0.65],
+                [1, 0],
+              ]),
+              sheathMat,
+            );
+            sheath.renderOrder = -2;
+            sheath.frustumCulled = false;
+            zodiacFrame.add(sheath);
           }
-          const leoEdgeGeo = new THREE.BufferGeometry();
-          leoEdgeGeo.setAttribute(
+          // (c) 缎带光边：0.16° 半宽实体带、暖白芯
+          {
+            const ribbonMat = new THREE.MeshBasicMaterial({
+              color: new THREE.Color(1.0, 0.97, 0.88),
+              transparent: true,
+              opacity: 0,
+              depthWrite: false,
+              side: THREE.DoubleSide,
+            });
+            zodiacOutlineEdgeMats.push(ribbonMat);
+            const ribbon = new THREE.Mesh(
+              stripGeo(0.16, [
+                [-1, 0],
+                [1, 0],
+              ]),
+              ribbonMat,
+            );
+            ribbon.renderOrder = -1;
+            ribbon.frustumCulled = false;
+            zodiacFrame.add(ribbon);
+          }
+          // (d) 标志内线：逐条签名线走开式 Catmull-Rom
+          {
+            const detPos: number[] = [];
+            for (const line of ZODIAC_DETAILS[oi]!) {
+              const fitted = line.map((pt) => {
+                const lamU = unwrapNear(
+                  pt[0] - ZODIAC_PRECESS_DEG,
+                  refLam,
+                );
+                return fitPt(fit, lamU, pt[1]);
+              });
+              const ext = [
+                fitted[0]!,
+                ...fitted,
+                fitted[fitted.length - 1]!,
+              ];
+              const sm: Array<[number, number]> = [];
+              for (let si = 0; si < ext.length - 3; si++) {
+                const q0 = ext[si]!;
+                const q1 = ext[si + 1]!;
+                const q2 = ext[si + 2]!;
+                const q3 = ext[si + 3]!;
+                for (let sj = 0; sj < 6; sj++) {
+                  const t = sj / 6;
+                  const t2 = t * t;
+                  const t3 = t2 * t;
+                  sm.push([
+                    0.5 *
+                      (2 * q1[0] +
+                        (-q0[0] + q2[0]) * t +
+                        (2 * q0[0] - 5 * q1[0] + 4 * q2[0] - q3[0]) * t2 +
+                        (-q0[0] + 3 * q1[0] - 3 * q2[0] + q3[0]) * t3),
+                    0.5 *
+                      (2 * q1[1] +
+                        (-q0[1] + q2[1]) * t +
+                        (2 * q0[1] - 5 * q1[1] + 4 * q2[1] - q3[1]) * t2 +
+                        (-q0[1] + 3 * q1[1] - 3 * q2[1] + q3[1]) * t3),
+                  ]);
+                }
+              }
+              sm.push(fitted[fitted.length - 1]!);
+              for (let si = 0; si < sm.length - 1; si++) {
+                const pa = pOf(sm[si]![0], sm[si]![1]);
+                const pb = pOf(sm[si + 1]![0], sm[si + 1]![1]);
+                detPos.push(pa[0], pa[1], pa[2], pb[0], pb[1], pb[2]);
+              }
+            }
+            const detGeo = new THREE.BufferGeometry();
+            detGeo.setAttribute(
+              "position",
+              new THREE.Float32BufferAttribute(detPos, 3),
+            );
+            const detMat = new THREE.LineBasicMaterial({
+              color: new THREE.Color(
+                FIG_GOLD[0],
+                FIG_GOLD[1],
+                FIG_GOLD[2],
+              ),
+              transparent: true,
+              opacity: 0,
+              depthWrite: false,
+            });
+            zodiacDetailMats.push(detMat);
+            const detLines = new THREE.LineSegments(detGeo, detMat);
+            detLines.renderOrder = 0;
+            zodiacFrame.add(detLines);
+          }
+          // 星尘采样：只落本宫剪影内（确定性种子）
+          {
+            let mnU = Infinity;
+            let mxU = -Infinity;
+            let mnV = Infinity;
+            let mxV = -Infinity;
+            for (const p of curve) {
+              mnU = Math.min(mnU, p[0]);
+              mxU = Math.max(mxU, p[0]);
+              mnV = Math.min(mnV, p[1]);
+              mxV = Math.max(mxV, p[1]);
+            }
+            const rand = seededRand(90210 + oi * 131);
+            let placed = 0;
+            let guard = 0;
+            while (placed < 16 && guard < 400) {
+              guard++;
+              const x = mnU + rand() * (mxU - mnU);
+              const y = mnV + rand() * (mxV - mnV);
+              if (!pipTest(curve, x, y)) continue;
+              const p = pOf(x, y);
+              dustPos.push(p[0], p[1], p[2]);
+              dustSize.push(0.05 + rand() * 0.05);
+              placed++;
+            }
+          }
+        }
+        // 星尘合成（全图一笔）：柔光圆点、峰值 0.5
+        {
+          const dustGeo = new THREE.BufferGeometry();
+          dustGeo.setAttribute(
             "position",
-            new THREE.Float32BufferAttribute(leoEdgePos, 3),
+            new THREE.Float32BufferAttribute(dustPos, 3),
           );
-          zodiacLeoEdgeMat = new THREE.LineBasicMaterial({
-            color: new THREE.Color(
-              FIG_GOLD[0],
-              FIG_GOLD[1],
-              FIG_GOLD[2],
-            ),
-            transparent: true,
-            opacity: 0,
-            depthWrite: false,
-          });
-          const leoEdge = new THREE.LineLoop(leoEdgeGeo, zodiacLeoEdgeMat);
-          leoEdge.renderOrder = -1;
-          solarGroup.add(leoEdge);
+          dustGeo.setAttribute(
+            "aSize",
+            new THREE.Float32BufferAttribute(dustSize, 1),
+          );
+          zodiacDustMat = makeZodiacGlyphMat(softTex, 0.5);
+          const dust = new THREE.Points(dustGeo, zodiacDustMat);
+          dust.renderOrder = -1;
+          zodiacFrame.add(dust);
         }
       }
     }
+    await sl.yieldNow();
+    // —— 地心视线桥（2026-11-15 新增，用户原则「一个画面只许一个
+    // 中心」落地）：太阳系全览是日心画面、管结构；一切读数归地
+    // 心、管判断；黄道环在日心画面里只是方向参考环，不许默认
+    // 「行星站在哪段就是落哪个宫」。点选一颗行星（或太阳/月亮）
+    // 时，自地球当前场景位置向该天体画一条视线、延长打到黄道环
+    // （R = 7.95×SOLAR_S，与环本体同半径），落点高亮，落点旁标
+    // 地心落宫（宫名＋宫内度数）。读数走 moonPhase 地心链（行星
+    // planetGeocentricEcliptic / 太阳 sunGeocentricEcliptic /
+    // 月亮 moonEcliptic——与世事占星卡同源同函数，岁差已对齐当
+    // 日回归黄道），不许另算一份。视线只在点选状态存在（sightK
+    // 平滑淡入淡出、取消点选即收起），不进常驻构图；与彗星舞台
+    // 轮值、背景八星全览隐藏各走各的门控、互不冲突。星街彗星
+    // 是虚构客串（无地心链），不设视线。地球（2026-11-15 补
+    // 洞，用户实报「点地球什么都没有」）：它本身是观察点、没
+    // 有「从地球看地球」的方向，但点选它时画站在地球上最有
+    // 意义的一条视线——地球→太阳（实线）再延到太阳的地心落
+    // 点（虚线）：地球、太阳、落点三者恒共线（太阳地心黄经 =
+    // 地球日心黄经 + 180°），这条线构造上无折角；信息牌口径
+    // 见 App 的 BodySignReadings 地球分支。
+    // 口径差与落点定法（审计 P1 修正后）：场景距离是压缩示意
+    // （orbitR），若把视线自地球穿行星直延到环，落点方向与真
+    // 实地心黄经存在视差差（实测火星 +9.6°、木星 +20.4°，跨
+    // 宫——量测与成因见 DATA-PLAN 本轮条目），落点就会与标签
+    // 读数互相矛盾、正是本原则要禁的镜像错误。故落点恒按地心
+    // 链黄经落在环上：实线段 地球→行星（看的目标），虚线段
+    // 行星→链落点（把读数投到环上的延长，虚线即「投影、非物
+    // 理视线」的图面约定），落点/标签/环段三者恒一致；两方向
+    // 的角度差（折角）由验收钩子逐帧量出、不藏。
+    // 用色浅钢蓝白：不抢金（主操作/太阳）、红绿（行情）、青
+    // （UI 强调）、奶金（黄道图形）等既有语义色。绘制账 +5
+    // （实线/虚线/落点球/落点晕/标签精灵），纹理 +2（晕图/标
+    // 签画布）。
+    const SIGHT_RING_R = 7.95 * SOLAR_S;
+    const sightGroup = new THREE.Group();
+    solarGroup.add(sightGroup);
+    const sightLineGeo = new THREE.BufferGeometry();
+    sightLineGeo.setAttribute(
+      "position",
+      new THREE.BufferAttribute(new Float32Array(6), 3),
+    );
+    const sightLineMat = new THREE.LineBasicMaterial({
+      color: 0xb9cfe4,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+    });
+    const sightLine = new THREE.Line(sightLineGeo, sightLineMat);
+    sightLine.frustumCulled = false;
+    sightGroup.add(sightLine);
+    // 延长段（行星→链落点）：虚线 = 把地心读数投到环上的投影
+    // 约定，与实线段的物理视线分家（见上方口径注）
+    const sightExtGeo = new THREE.BufferGeometry();
+    sightExtGeo.setAttribute(
+      "position",
+      new THREE.BufferAttribute(new Float32Array(6), 3),
+    );
+    const sightExtMat = new THREE.LineDashedMaterial({
+      color: 0xb9cfe4,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      dashSize: 0.09,
+      gapSize: 0.06,
+    });
+    const sightExtLine = new THREE.Line(sightExtGeo, sightExtMat);
+    sightExtLine.frustumCulled = false;
+    sightGroup.add(sightExtLine);
+    const sightDotMat = new THREE.MeshBasicMaterial({
+      color: 0xe6f1fd,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+    });
+    const sightDot = new THREE.Mesh(
+      new THREE.SphereGeometry(0.055, 16, 12),
+      sightDotMat,
+    );
+    sightGroup.add(sightDot);
+    const sightHaloMat = new THREE.SpriteMaterial({
+      map: makeGlowTexture(
+        "rgba(230,241,253,0.9)",
+        "rgba(150,180,215,0.28)",
+      ),
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      depthTest: false,
+    });
+    const sightHalo = new THREE.Sprite(sightHaloMat);
+    sightHalo.scale.set(0.34, 0.34, 1);
+    sightGroup.add(sightHalo);
+    // 落点地心标签：可重绘画布精灵，文字随读数变、文本不变不重绘
+    const sightLabelCanvas = document.createElement("canvas");
+    sightLabelCanvas.width = 512;
+    sightLabelCanvas.height = 128;
+    const sightLabelTex = new THREE.CanvasTexture(sightLabelCanvas);
+    sightLabelTex.colorSpace = THREE.SRGBColorSpace;
+    const sightLabelMat = new THREE.SpriteMaterial({
+      map: sightLabelTex,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      depthTest: false,
+    });
+    const sightLabel = new THREE.Sprite(sightLabelMat);
+    sightLabel.renderOrder = 12;
+    sightGroup.add(sightLabel);
+    let sightLabelText = "";
+    const drawSightLabel = (text: string): void => {
+      if (text === sightLabelText) return;
+      sightLabelText = text;
+      const g = sightLabelCanvas.getContext("2d")!;
+      g.clearRect(0, 0, 512, 128);
+      g.font = "500 46px 'Noto Sans SC', system-ui, sans-serif";
+      g.textAlign = "center";
+      g.textBaseline = "middle";
+      g.lineWidth = 8;
+      g.lineJoin = "round";
+      g.strokeStyle = "rgba(3,8,18,0.85)";
+      g.strokeText(text, 256, 66);
+      g.fillStyle = "#eef4fc";
+      g.fillText(text, 256, 66);
+      sightLabelTex.needsUpdate = true;
+    };
+    sightGroup.visible = false;
+    /** 视线在位系数（0..1，animate 指数趋近，与 zodiacFigK 同语法） */
+    let sightK = 0;
+    const sightE = new THREE.Vector3();
+    const sightT = new THREE.Vector3();
+    const sightL = new THREE.Vector3();
+    /** 视线验收钩子读数（animate 逐帧写）：sceneGeoDeg = 地球→
+     * 目标的场景方向黄经、chainGeoDeg = 同帧地心链黄经（落点与
+     * 标签按它落位）、bendDeg = 两者之差（虚线段的折角，示意
+     * 视差的量测本体）——供审计探针直接读数，不靠肉眼估 */
+    const sightState: {
+      id: string | null;
+      k: number;
+      sceneGeoDeg: number | null;
+      chainGeoDeg: number | null;
+      bendDeg: number | null;
+      label: string;
+    } = {
+      id: null,
+      k: 0,
+      sceneGeoDeg: null,
+      chainGeoDeg: null,
+      bendDeg: null,
+      label: "",
+    };
+    (window as unknown as Record<string, unknown>).__financeGlobeSight =
+      {
+        state: () => ({ ...sightState }),
+        // 天体屏幕坐标（画布相对 px，验收探针据此发真实点按走
+        // handleTap 全链，而不是绕过点选直接写状态——A2 逐颗
+        // 触发实测口径）；pos/半径与点按兜底判定同一 bodyWorldInfo
+        bodyPx: (id: string) => {
+          const info = bodyWorldInfo(id);
+          if (!info) return null;
+          const rect = el.getBoundingClientRect();
+          const v = info.pos.clone().project(camera);
+          return {
+            x: ((v.x + 1) / 2) * rect.width,
+            y: ((1 - v.y) / 2) * rect.height,
+            behind: v.z >= 1,
+          };
+        },
+      };
+    await sl.yieldNow();
+    // —— 莫比乌斯带客串（太阳系故事层，2026-11-15，用户令「先做
+    // 莫比乌斯环客串」；克莱因瓶明确不在本轮，只在小卡文案里提
+    // 一句、不做瓶体）——
+    // 本体：一条参数曲面莫比乌斯带，斜挂在太阳系外圈、整体缓慢
+    // 自转。
+    // —— 质感纠正轮（2026-11-15 晚，用户真机裁决「不按照参
+    // 考来做、出入太大了」＋纠正单）：此前各轮的克制条款
+    // （「亮度压在数据层之下」「峰值不透明度 0.16」「低饱
+    // 和」）与用户指定参考（3.7 开屏原片 BV1xq1nBmE4e 扭
+    // 带段）冲突、**即时作废**；让位原则改为靠层次与透明
+    // 度让位、不靠饿瘦自己。本轮以参考为唯一标准重做质
+    // 感：带宽 0.22 → 0.40、带面峰值不透明度 0.16 → 0.50
+    // （半透厚度）、双面渐变饱和上调 + 白色热芯线 + 流光
+    // 提速、边缘加光鞘（三角带承载光边，不再只有 1px
+    // 线）。形状（横置 ∞＋星扣＋双带尾）、双面色体系、翻
+    // 面机制、摆位/倾角/门控一字不变——错的是质感营养，
+    // 不是骨架。逐项对照自评见 DATA-PLAN 本轮条目。
+    // —— 蝴蝶结形改版（2026-11-15 晚，用户指认「昔涟真正的标志
+    // 物是她手里的莫比乌斯环，像蝴蝶结」；官方名「象征翁法罗斯
+    // 的莫比乌斯手环」）——带不再是均匀圆环。当晚 20:22 用户
+    // 亲口钉死轮廓硬线（工单六）：「你那个环也要做成 ♾️ 形，
+    // 不能是圆形」——上一版「大环绕盘＋小环下垂」纵向构图作
+    // 废（第一眼读出的是「环＋坠子」不是 ♾️）。中心线重做为
+    // 横置 ∞（Gerono 双纽线，见 MOB_INF_A）：两瓣左右并列、
+    // 共用正中心交叉点，星扣（粉白星芒五角星，工单七改色）
+    // 压在正中心交叉点上，双带尾仍垂在扣下（一粉一蓝、轻
+    // 摆）。∞ 半宽 4.72、带面最远 ≈4.83 < 黄道环 4.929，取
+    // 景一字未动；工单八：摆位与倾角锁定现行出货值，路径只
+    // 在现摆位内部重做。两支在交叉点以 y = ±0.06 错层相交
+    // （sin u 沿程），不共面穿插。
+    // 几何诚实：仍是真莫比乌斯带——带面 P(u, v) = C(u) +
+    // v·W(u)，W = cosψ·E1 + sinψ·ŷ（E1 为中心线切向在带面内
+    // 旋 90°），半扭转 ψ(u) 总量恒为 π，但集中在星扣窗口
+    // （u = MOB_U1 ± 0.15 的 smoothstep 段）内累积：扣前 ψ≈0、
+    // 扣后 ψ≈π。接缝纪律不变：u = 2π 列顶点取 v 反号落位
+    // ——P(2π, v) ≡ P(0, −v)，网格按此闭合、无裂缝无重叠。
+    // 带面半透明（峰值不透明度 0.50，纠正轮口径——旧
+    // 「压在数据层之下、峰值 0.16」条款已作废，见上方纠
+    // 正轮注）。色彩定版（工单七，2026-11-15：只
+    // 认 3.7 开屏一个来源，覆盖此前从终结技/立绘拼出的配
+    // 色）：带面改双面体系、以面定色（shader 按
+    // gl_FrontFacing 分面）——一面暖色渐变 金橙→绿→青蓝
+    // （带星光颗粒、沿带面缓行，即开屏扭带的流转，不再另
+    // 叠虹彩层）、另一面 银白→粉紫；过星扣后哪一面朝外互
+    // 换，由 ψ 在扣附近的 π 扭转从几何里长出来，不手动贴
+    // 换。此前「粉/品红边 vs 青蓝边」的边缘分色就此作废：
+    // 边界仍按双圈 τ∈[0,2) 描一整圈（莫比乌斯带只有一条
+    // 边界曲线），两条边缘统一改亮白发光线（主线＋加色辉
+    // 光线同几何叠加），带面内另有极细光丝（shader 调制）。
+    // 行走光点（核心机制）：一颗光点沿带面中心线（v = 0）行
+    // 走，周期 MOB_PERIOD_S = 90 秒/圈（会话时钟，与彗星舞台
+    // 同口径：t 为打开空间起的会话秒；reduced-motion 冻结在起
+    // 始相位）。光点带不对称标记（侧向箭鳍 + 偏置小球）：标记
+    // 的朝向逐帧由带面局部标架导出——切向 T（中心线中央差
+    // 分）、横向 W(u)、法向 N = T×W，标记组四元数由
+    // makeBasis(T, W, N) 逐帧设定。u 推进 2π 时 ψ 累积 π、W
+    // 与 N 同步反号：标记走完一圈回到同一点时呈镜像翻转（鳍
+    // 尖反向、小球落到带面另一侧），第二圈复原——翻转从几何
+    // 里长出来，无贴图切换、无手动翻转。翻面集中发生在过星
+    // 扣瞬间（ψ 窗口即在扣处），迸散也收在扣处爆发。验收钩
+    // 子 __financeGlobeMobius 可确定性跳相位（setPhase(圈
+    // 数)）取翻面对比帧、frameAt(圈数) 读标架数值。
+    // 模式显隐（与黄道图形同门控）：只在太阳系**全览**在位
+    // （mobVis = sunFade × zodiacFigK × (1−eG)）——主页不显、
+    // 近览/聚焦不显、银河不显；默认不挂名签（故事层规矩）。
+    // 点选：点中带体/光点（行星命中优先、本元素最后裁决，见
+    // handleTap 太阳系分支）→ 带体提亮 + 弹故事层小卡（玫瑰
+    // 色调、明标「故事层 · 意象」，与数据层玻璃卡视觉分家）；
+    // 再点带体或点别处收起。不进 solarHitList / planetVis /
+    // 聚焦矩阵，不碰黄道环、星历、ψ(t)、视线桥与任何读数。
+    // 性能账：参数网格 1 张（240×8）+ 边界线 1 + 光点 4 件，
+    // 逐帧只算一组标架，零新增渲染通道。
+    // —— 视觉定调改版（2026-11-15 晚，用户问「可以做成昔涟大
+    // 招的样子吗」；同晚主座逐帧核 BWIKI 终结技演示 GIF＋实
+    // 机视频后紧急修订，冲突处以修订为准）：只换外观与动效语
+    // 言，几何/取景/周期/标架翻面/门控/点选裁决一律不变。昔
+    // 涟（《崩坏：星穹铁道》）终结技名即「诗的『。』，誓约的
+    // 『∞』」，施放后展开「往昔的涟漪」结界。实机主参考是缎
+    // 带涡旋：宽、扁、半透明缎带，渐变 白 → 粉 → 淡蓝，带身
+    // 光泽边缘，缓慢翻卷流动——照其配色/质感/动效语言原创实
+    // 现（不搬运、不描摹游戏素材）：① 带面改白→粉→淡蓝缎带
+    // 渐变半透，边缘光泽描边（shader 沿边界相位流动，粉金只
+    // 作流光峰值的微光、不作主色）+ 光尘微粒 90 粒沿带面稀
+    // 疏漂移，整体随既有自转慢翻卷；② 行走光点 = 涟漪源（与
+    // 她启动时水面平台的涟漪纹同源），身后在带面上周期扩散
+    // 细涟漪环（池 6 枚），扩散到带宽边缘衰减消失；③ 光点每
+    // 走完一圈、翻面瞬间迸出一小簇粉紫水晶碎片（棱柱小片，
+    // 品红芯/青边两色）向外飞散 + 一点白色星爆，随即收净——
+    // 只是视觉标点，翻面判定仍靠标记镜像；全元素无花瓣/花朵
+    // （实机没有花瓣雨，粒子语言是粉色星形光点、白色光尘、
+    // 亮白星爆与粉紫水晶棱柱）；④ 点选时一圈涟漪光自点选处
+    // 沿带面扩散至全带（结界展开动势，波前 shader 覆膜与带
+    // 体共用几何），随后提亮停驻；收起反向收净；⑤ 小卡在原
+    // 三行后加一行出处，标明致敬。另：实机全程无弓（「粉金
+    // 长弓」是付费专武外观的文字资料、已撤销），本元素不加
+    // 任何弓形元素。
+    // 新增绘制账：光尘点云 1（90 粒）+ 涟漪线池 6 + 水晶碎
+    // 片 14 小片 + 星爆精灵 1 + 波前覆膜 1（共用带体几何）+
+    // 边界改 shader 材质（绘制数不变）——全是廉价实现，无
+    // 持续高开销通道。
+    // —— 蝴蝶结形改版的增删（2026-11-15 晚续）：⑥ 点选收尾
+    // 的平面 ∞ 光痕**撤销并清除干净**——带本身已是 ∞/蝴蝶结
+    // 形，不再另画（本段上方 ④ 的光痕条款与下方绘制账中的
+    // 「∞ 光痕线 1」均已作废）；⑦ 星扣（金星 + 辉光）1 组 +
+    // 双带尾 2 条为本轮新增绘制，边界改顶点色双色线（绘制
+    // 数不变）。
+    // —— 开屏定版轮（2026-11-15 20:20–20:24，工单四～八连
+    // 续定版，冲突处以最晚为准）：⑧ 形状按工单六改横置 ∞
+    // （见上方改版段）；⑨ 色彩按工单七只认开屏：带面双面
+    // 体系（暖面金橙→绿→青蓝流转＋星光颗粒／背面银白→粉
+    // 紫，shader 以面定色）、边缘亮白发光线、星扣改粉白星
+    // 芒（⑦ 的金星作废）、④ 的「全元素无花瓣」结论被工单
+    // 四推翻一半——元灿亲自指定开屏参考（00:56 转场有粉紫
+    // 花瓣飘落）：结周加 6 片粉紫花瓣光斑稀疏漂移；但 ③ 的
+    // 翻面迸散仍是粉紫水晶碎片、不许换花瓣，花瓣只此一
+    // 处；⑩ 位置按工单八锁定：太阳系全览、现摆位与倾角不
+    // 动。小卡出处行尾补「质感取自 3.7 开屏动画」。
+    // —— 位置上调（2026-11-15 22:42 元灿本人开口，⑩ 锁
+    // 的例外）：整体沿组本地 +Y 上抬（见 mobOuter 处
+    // MOB_LIFT 注：天花板实测与读法口径都在那里）；同日
+    // 23:39 元灿再令继续上抬，MOB_LIFT 1.50 → 1.75（抬满
+    // 至天花板内最后一格，账目同在 MOB_LIFT 注）。
+    // 2026-11-16 元灿再令「位置再调高一些，环的角度可以
+    // 再稍微调整」：MOB_LIFT 1.75 → 2.00、mobTilt 微调
+    // (0.42,0,0.16) → (0.34,0,0.12) 腾挪（账目同在
+    // MOB_LIFT 注）；同轮高亮改回点击触发（见帧段注）。
+    // 本轮新增绘制账：边缘辉光线 1（与主线同几何）+ 花瓣
+    // 精灵 6；带面改 shader（绘制数不变）；既有效果零删改。
+    // 带宽（纠正轮 0.22 → 0.40 对参考的宽缎带比例；带面最
+    // 远 4.72 + 0.20 = 4.92 仍在黄道环半径 4.929 内侧）
+    const MOB_W = 0.4;
+    const MOB_PERIOD_S = 90;
+    const MOB_U0 = 2.4;
+    // —— 横置 ∞ 中心线（工单六定版，2026-11-15 20:22 元灿
+    // 亲口：「你那个环也要做成 ♾️ 形，不能是圆形」；工单八：
+    // 摆位/倾角锁定现行出货值，路径只在现摆位内部重做）——
+    // 星扣相位 = ∞ 正中心交叉点（u = π/2 支）：光点每圈两
+    // 次过心，ψ 的 π 扭转集中在此支窗口内累积、翻面与迸散
+    // 都收在此处；另一支（u = 3π/2）以 y 错层在其下通过
+    const MOB_U1 = Math.PI / 2;
+    // 半扭转 ψ 的集中窗口半宽（相位弧度）：ψ 在星扣前后
+    // ±MOB_TWIST_D 内以 smoothstep 累积满 π，其余相位恒 0/π
+    const MOB_TWIST_D = 0.15;
+    // ∞ 半宽（瓣尖距心）：瓣尖 |C| = 4.72、带面最远 ≈4.83，
+    // 在黄道环半径 4.929 之内——全览取景一字未动
+    const MOB_INF_A = 4.72;
+    const mobWrapU = (uu: number): number =>
+      ((uu % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+    /** 中心线 C(u)：横置 ∞（Gerono 双纽线），C(2π) ≡ C(0)（右瓣尖） */
+    const mobCenterAt = (
+      u: number,
+      out: THREE.Vector3,
+    ): THREE.Vector3 => {
+      const cu = Math.cos(u);
+      const su = Math.sin(u);
+      // 两瓣左右并列：x = A·cos u ∈ [−A, A]，z = A·sin u·cos u
+      // ∈ [−A/2, A/2]；交叉点在正中心（u = π/2、3π/2 两次过
+      // 心，两支切向正交），y = 0.06·sin u 使两支在扣处以
+      // ±0.06 错层（一支在上、一支在下，不共面穿插）
+      return out.set(MOB_INF_A * cu, 0.06 * su, MOB_INF_A * su * cu);
+    };
+    /** 半扭转角 ψ(u)：总量 π、集中在星扣窗口内累积 */
+    const mobPsi = (u: number): number => {
+      const x = THREE.MathUtils.clamp(
+        (u - (MOB_U1 - MOB_TWIST_D)) / (2 * MOB_TWIST_D),
+        0,
+        1,
+      );
+      return Math.PI * (x * x * (3 - 2 * x));
+    };
+    interface MobFrame {
+      c: THREE.Vector3;
+      t: THREE.Vector3;
+      w: THREE.Vector3;
+      n: THREE.Vector3;
+    }
+    const mobFrameTmpA = new THREE.Vector3();
+    const mobFrameTmpB = new THREE.Vector3();
+    /**
+     * 局部标架（T 切向 / W 横向 / N 法向）：T 由中心线中央差
+     * 分（跨星扣的切向折角被差分窗自然柔化）、E1 = T 在
+     * (p, q) 面内旋 +90°、W = cosψ·E1 + sinψ·ŷ 后对 T 正交
+     * 化、N = T×W。circuits = 已完成圈数：ψ 逐圈再累积 π，
+     * 故 W/N 每圈反号、两圈复原——与几何网格（circuits = 0、
+     * ψ(2π) = π 的接缝反号）同一条规矩。
+     */
+    const mobFrameAt = (
+      u: number,
+      circuits: number,
+      fr: MobFrame,
+    ): MobFrame => {
+      mobCenterAt(u, fr.c);
+      const du = 0.02;
+      mobCenterAt(mobWrapU(u - du), mobFrameTmpA);
+      mobCenterAt(mobWrapU(u + du), mobFrameTmpB);
+      fr.t.subVectors(mobFrameTmpB, mobFrameTmpA).normalize();
+      const e1p = fr.t.z;
+      const e1q = fr.t.x;
+      const psi = mobPsi(u) + circuits * Math.PI;
+      const cp = Math.cos(psi);
+      fr.w.set(e1p * cp, Math.sin(psi), -e1q * cp);
+      fr.w.addScaledVector(fr.t, -fr.w.dot(fr.t)).normalize();
+      fr.n.crossVectors(fr.t, fr.w);
+      return fr;
+    };
+    const mobScratchFrame: MobFrame = {
+      c: new THREE.Vector3(),
+      t: new THREE.Vector3(),
+      w: new THREE.Vector3(),
+      n: new THREE.Vector3(),
+    };
+    /** 带面点 P(u, v) = C(u) + v·W(u)（材料坐标，circuits = 0） */
+    const mobPoint = (
+      u: number,
+      v: number,
+      out: THREE.Vector3,
+    ): THREE.Vector3 => {
+      mobFrameAt(u, 0, mobScratchFrame);
+      return out
+        .copy(mobScratchFrame.c)
+        .addScaledVector(mobScratchFrame.w, v);
+    };
+    const mobOuter = new THREE.Group();
+    // —— 位置上调（2026-11-15 22:42 元灿本人开口，八补充
+    // 位置锁的例外条款）：整体沿 solarGroup 本地 +Y 刚性
+    // 平移上抬 MOB_LIFT——本地 +Y 是组自转（rotation.y）
+    // 的不变轴、且经组倾角 rotation.x = 0.55 投影后屏
+    // 幕横偏恒为 0（中心恒在太阳的竖直中轴上、无横漂），
+    // 大小/形状/双面色/翻面/门控一字不动，只动位置（倾角
+    // 于 2026-11-16 轮经元灿授权微调，见下）。
+    // 上限实测（离线同式复算，见 DATA-PLAN 本轮条目）：
+    // 桌面全览取景半高 = 7.95×SOLAR_S×1.05 ≈ 5.175 本地
+    // 单位（全览按最小半视场拟合、竖直半高恒 ≥ 此值，桌
+    // 面/横屏即最紧侧）；旧倾角（0.42/0/0.16）下带体在最
+    // 坏自转相位顶高 3.63、底 −3.66。屏幕顶高 = 3.63 +
+    // L×cos(0.55)，余量 = 1.545 − 0.8525×L：抬 1.50 时顶
+    // 4.91、余量 0.27 ≈ 画面高 2.6%；L ≈ 1.81 时余量归零
+    // （硬天花板，元灿口径取整 1.8）。2026-11-15 23:39 元
+    // 灿再令抬满：落点 L = 1.75——顶 5.12、余量 ≈0.05 本
+    // 地单位 ≈ 画面高 0.5%，是不缩带、不改取景前提下带
+    // 体完整在框的最后一格；中心屏幕上移 1.75×cos(0.55)
+    // ≈ 1.49 世界单位 ≈ 画面高 14.4%。黄道环顶屏幕高
+    // +2.58：带体自身投影高 ±3.63 > 取景半高与环顶之差，
+    // 全带压到环顶之上需抬 ≈7.0、取景内不可能——全带脱
+    // 环仍需元灿另裁缩带/取景，本轮不授权。
+    // —— 再上抬 + 倾角微调（2026-11-16 元灿令「位置再调
+    // 高一些，环的角度可以再稍微调整」，授权以倾角腾挪）：
+    // mobTilt 由 (0.42, 0, 0.16) 微调为 (0.34, 0, 0.12)
+    // （x 轴 24.1°→19.5°、z 轴 9.2°→6.9°，带面略向黄道
+    // 面回平），同式复算带体顶高 3.63→3.42、底 −3.46、
+    // 横 ±4.90 不变；MOB_LIFT 1.75 → 2.00（与前两步同幅
+    // +0.25 一档）：顶 = 3.42 + 2.00×cos(0.55) ≈ 5.13、
+    // 余量 ≈0.05 本地单位 ≈ 画面高 0.5%——与上一落点同
+    // 一安全口径；中心屏幕上移 ≈1.71 世界单位 ≈ 画面高
+    // 16.5%。附带核对（光鞘外展 +0.17 的含鞘口径，采样
+    // v 至 ±0.37）：新态顶 5.25、名义余量 −0.075，与现行
+    // 出货态（L=1.75 旧倾角）同口径的 −0.08 相当——鞘尖
+    // alpha 本就归零，抬升后在框读法不劣于现状。带的大
+    // 小/形状/色系/机制仍一字未动，动的只有位置与倾角。
+    const MOB_LIFT = 2.0;
+    mobOuter.position.set(0, MOB_LIFT, 0);
+    const mobTilt = new THREE.Group();
+    mobTilt.rotation.set(0.34, 0, 0.12);
+    mobOuter.add(mobTilt);
+    mobOuter.visible = false;
+    solarGroup.add(mobOuter);
+    const MOB_SEG_U = 240;
+    const MOB_SEG_V = 8;
+    // 带面材质（工单七色彩定版，2026-11-15：色彩只认 3.7
+    // 开屏一个来源；2026-11-15 晚纠正轮按同一参考重做质
+    // 感密度）：双面体系、以面定色——正面
+    // （gl_FrontFacing）= 暖面渐变 金橙→绿→青蓝（饱和按
+    // 参考帧上调），沿带面流动（相位随时间漂移，即开屏
+    // 扭带的流转，不另叠虹彩层）+ 星光颗粒（双层、密度
+    // 上调）；背面 = 银白→粉紫渐变（粉紫加深）。哪一面
+    // 朝外由半扭转几何决定：过星扣后两面互换从 ψ 的 π
+    // 扭转长出来，shader 不手动换色。带面中线一条白色热
+    // 芯（参考缎带的白炽芯线）、带缘向亮白提亮（与亮白
+    // 发光边缘线 + 光鞘同口径）；极细光丝 = v 向高频亮
+    // 度调制（只提亮不压暗）。uBandA = 整体不透明度
+    // （逐帧驱动，峰值 0.50×提亮系数——纠正轮口径，旧
+    // 0.16 压暗值已作废）
+    const mobBandMat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      uniforms: {
+        uTime: { value: 0 },
+        uBandA: { value: 0 },
+        uPulseU: { value: 0 },
+        uPulseA: { value: 1 },
+      },
+      vertexShader: `
+        attribute float aU;
+        attribute float aV;
+        varying float vU;
+        varying float vV;
+        void main() {
+          vU = aU;
+          vV = aV;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }`,
+      fragmentShader: `
+        uniform float uTime;
+        uniform float uBandA;
+        uniform float uPulseU;
+        uniform float uPulseA;
+        varying float vU;
+        varying float vV;
+        float mobHash(vec2 p) {
+          return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+        }
+        vec3 mobWarm(float x) {
+          vec3 c1 = vec3(1.0, 0.55, 0.12);
+          vec3 c2 = vec3(0.16, 0.92, 0.42);
+          vec3 c3 = vec3(0.16, 0.55, 1.0);
+          vec3 col = mix(c1, c2, smoothstep(0.0, 0.5, x));
+          return mix(col, c3, smoothstep(0.5, 1.0, x));
+        }
+        vec3 mobCool(float x) {
+          vec3 c1 = vec3(0.98, 0.98, 1.0);
+          vec3 c2 = vec3(0.87, 0.48, 0.94);
+          return mix(c1, c2, smoothstep(0.15, 0.95, x));
+        }
+        void main() {
+          float s = vU * 0.15915494;
+          float flow = fract(s - uTime * 0.03);
+          vec3 warm = mobWarm(flow);
+          // 流光亮带：一道亮脉冲随渐变同向缓行（参考缎带
+          // 上流动的高光段）
+          warm += pow(0.5 + 0.5 * sin((flow) * 6.2831853 * 2.0), 3.0) * 0.28;
+          float sp = mobHash(floor(vec2(vU * 110.0, vV * 7.0)) + floor(uTime * 1.5) * 17.0);
+          warm += step(0.978, sp) * 0.8;
+          float sp2 = mobHash(floor(vec2(vU * 190.0, vV * 11.0)) + floor(uTime * 2.3) * 31.0);
+          warm += step(0.99, sp2) * 0.5;
+          vec3 cool = mobCool(fract(s + 0.35));
+          cool += step(0.988, mobHash(floor(vec2(vU * 90.0, vV * 6.0)))) * 0.4;
+          vec3 col = gl_FrontFacing ? warm : cool;
+          // 周期光脉冲（特效增密轮）：一道光涌沿 ∞ 缓行
+          // （uPulseU 由帧段以 22 秒/圈推进）——常驻光流
+          // 动的起伏，两面同加、白粉色，与流光同向同源
+          float pd = abs(vU - uPulseU);
+          pd = min(pd, 6.2831853 - pd);
+          float surge = exp(-pow(pd / 0.55, 2.0)) * uPulseA;
+          col += vec3(1.0, 0.92, 0.96) * surge * 0.38;
+          float fil = 0.88 + 0.35 * pow(0.5 + 0.5 * sin(vV * 34.0), 10.0);
+          col *= fil;
+          // 白色热芯：带面中线一条白炽芯（参考缎带中缝的
+          // 高亮线），向两侧高斯衰减
+          float core = exp(-pow(vV * 1.7, 2.0));
+          col += vec3(1.0) * core * 0.38;
+          float edge = smoothstep(0.62, 1.0, abs(vV));
+          col = mix(col, vec3(1.0), edge * 0.65);
+          gl_FragColor = vec4(col, uBandA);
+        }`,
+    });
+    // 常驻流动光覆膜材质（2026-11-16 更正轮，用户澄清：
+    // 「我说的那个常驻效果不是周围的高光，而是那个点一
+    // 下就随环带流动的那个光」）：前身是点选涟漪波前（点
+    // 带才自点击处扩散一道光）——本轮把触发改恒开：uFlowU
+    // = 流动光头部的带面相位，由帧段会话时钟直推、2.8 秒
+    // 一圈（= 旧涟漪波前速度 π/1.4s，速度/亮度/粉白色系
+    // 沿旧观感），头部紧（σ≈0.16）、身后拖尾渐隐
+    // （σ≈0.62），一道亮光沿 ∞ 带面永续循环；点选与它彻
+    // 底脱钩（点带只弹卡，关卡后流动照旧）。uWaveA = 随
+    // 带可见度淡变
+    const mobWaveMat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+      uniforms: {
+        uFlowU: { value: 0 },
+        uWaveA: { value: 0 },
+      },
+      vertexShader: `
+        attribute float aU;
+        varying float vU;
+        void main() {
+          vU = aU;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }`,
+      fragmentShader: `
+        uniform float uFlowU;
+        uniform float uWaveA;
+        varying float vU;
+        void main() {
+          float d = mod(vU - uFlowU + 3.14159265, 6.2831853) - 3.14159265;
+          float w = d > 0.0 ? 0.16 : 0.62;
+          float g = exp(-pow(d / w, 2.0));
+          vec3 col = mix(vec3(1.0, 0.66, 0.78), vec3(0.82, 0.90, 1.0), 0.45);
+          gl_FragColor = vec4(col, g * 0.55 * uWaveA);
+        }`,
+    });
+    {
+      const pos: number[] = [];
+      const col: number[] = [];
+      const aus: number[] = [];
+      const avs: number[] = [];
+      const idx: number[] = [];
+      const tmp = new THREE.Vector3();
+      // 缎带涡旋渐变（实机主参考）：沿程 白 → 粉 → 淡蓝 →
+      // 白，接缝处同色无缝（u = 2π 与 u = 0 同为白）
+      const cWhite = new THREE.Color(0xf7f3f5);
+      const cPink = new THREE.Color(0xf3b7cd);
+      const cBlue = new THREE.Color(0xbcd9f2);
+      const cTmp = new THREE.Color();
+      const mobRibbonColor = (u: number, out: THREE.Color): void => {
+        const tt = u / (Math.PI * 2);
+        if (tt < 0.4) {
+          out.lerpColors(cWhite, cPink, tt / 0.4);
+        } else if (tt < 0.75) {
+          out.lerpColors(cPink, cBlue, (tt - 0.4) / 0.35);
+        } else {
+          out.lerpColors(cBlue, cWhite, (tt - 0.75) / 0.25);
+        }
+      };
+      for (let i = 0; i <= MOB_SEG_U; i++) {
+        const u = (i / MOB_SEG_U) * Math.PI * 2;
+        // 接缝列（i = SEG_U）：v 反号落位（P(2π,v) ≡ P(0,−v)）
+        const vFlip = i === MOB_SEG_U ? -1 : 1;
+        for (let j = 0; j <= MOB_SEG_V; j++) {
+          const vGrid =
+            -MOB_W / 2 + (j / MOB_SEG_V) * MOB_W;
+          const v = vGrid * vFlip;
+          mobPoint(u, v, tmp);
+          pos.push(tmp.x, tmp.y, tmp.z);
+          aus.push(u);
+          avs.push(vGrid / (MOB_W / 2));
+          const edgeK = Math.abs(vGrid) / (MOB_W / 2);
+          mobRibbonColor(u, cTmp);
+          const bright = 0.7 + 0.3 * edgeK;
+          cTmp.multiplyScalar(bright);
+          // 顶点色仅作波前覆膜的调试底色（带面实际着色走
+          // mobBandMat 的双面 shader、以面定色，工单七）
+          col.push(cTmp.r, cTmp.g, cTmp.b);
+        }
+      }
+      for (let i = 0; i < MOB_SEG_U; i++) {
+        for (let j = 0; j < MOB_SEG_V; j++) {
+          const a = i * (MOB_SEG_V + 1) + j;
+          const b = a + MOB_SEG_V + 1;
+          idx.push(a, b, a + 1, b, b + 1, a + 1);
+        }
+      }
+      const mobGeo = new THREE.BufferGeometry();
+      mobGeo.setAttribute(
+        "position",
+        new THREE.Float32BufferAttribute(pos, 3),
+      );
+      mobGeo.setAttribute(
+        "color",
+        new THREE.Float32BufferAttribute(col, 3),
+      );
+      // aU：顶点沿带相位（流动光覆膜按它算环向距离）
+      mobGeo.setAttribute(
+        "aU",
+        new THREE.Float32BufferAttribute(aus, 1),
+      );
+      // aV：顶点带宽向归一坐标（−1..1，带面 shader 按它做
+      // 带缘亮白提亮与光丝调制）
+      mobGeo.setAttribute(
+        "aV",
+        new THREE.Float32BufferAttribute(avs, 1),
+      );
+      mobGeo.setIndex(idx);
+      const mobBand = new THREE.Mesh(mobGeo, mobBandMat);
+      mobBand.renderOrder = 1;
+      mobBand.frustumCulled = false;
+      mobTilt.add(mobBand);
+      // 常驻流动光覆膜：与带体共用几何，只画一道沿带面
+      // 永续流动的粉白亮光（紧头拖尾），其余全透明
+      const wave = new THREE.Mesh(mobGeo, mobWaveMat);
+      wave.renderOrder = 2;
+      wave.frustumCulled = false;
+      mobTilt.add(wave);
+    }
+    // 边界：单条闭合曲线（双圈 τ∈[0, 2) 才回到起点）——莫比
+    // 乌斯带只有一条边界，这一圈线本身就是「只有一个面」的
+    // 注脚。颜色口径（工单七）：两条边缘统一改亮白发光线
+    // （开屏缎带/翼带最醒目的线）；单面性的颜色读法已改挂
+    // 带面双面体系（整面换色），边缘不再分色。纠正轮加厚：
+    // 1px 线撑不起参考里的光边——边缘另配一条**光鞘**三
+    // 角带（沿边界、向带内收 0.07 / 向带外展 0.17，alpha
+    // 在边缘处最高、两侧归零、加色混合），主线 + 辉光线
+    // 叠在鞘心，三层同几何同相位、不脱位
+    const mobEdgeMat = new THREE.LineBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+    });
+    const mobEdgeGlowMat = new THREE.LineBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const mobEdgeSheathMat = new THREE.ShaderMaterial({
+      uniforms: { uFade: { value: 0 } },
+      vertexShader: [
+        "attribute float aA;",
+        "varying float vA;",
+        "void main() {",
+        "  vA = aA;",
+        "  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);",
+        "}",
+      ].join("\n"),
+      fragmentShader: [
+        "uniform float uFade;",
+        "varying float vA;",
+        "void main() {",
+        "  gl_FragColor = vec4(vec3(1.0, 0.98, 1.0), vA * uFade);",
+        "}",
+      ].join("\n"),
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+    });
+    {
+      const pts: THREE.Vector3[] = [];
+      const dirs: THREE.Vector3[] = [];
+      const cols: number[] = [];
+      const tmp = new THREE.Vector3();
+      const shFrame: MobFrame = {
+        c: new THREE.Vector3(),
+        t: new THREE.Vector3(),
+        w: new THREE.Vector3(),
+        n: new THREE.Vector3(),
+      };
+      const SEG = 360;
+      for (let i = 0; i < SEG; i++) {
+        const tau = (i / SEG) * 2;
+        const uu = (tau < 1 ? tau : tau - 1) * Math.PI * 2;
+        if (tau < 1) {
+          pts.push(
+            mobPoint(uu, MOB_W / 2, tmp).clone(),
+          );
+        } else {
+          pts.push(
+            mobPoint(uu, -MOB_W / 2, tmp).clone(),
+          );
+        }
+        // 光鞘外展方向 = 带面横向 W 的向外侧（τ<1 支在
+        // +v 侧、τ≥1 支在 −v 侧）
+        mobFrameAt(uu, 0, shFrame);
+        dirs.push(
+          shFrame.w.clone().multiplyScalar(tau < 1 ? 1 : -1),
+        );
+        cols.push(1, 1, 1);
+      }
+      const edgeGeo = new THREE.BufferGeometry().setFromPoints(pts);
+      edgeGeo.setAttribute(
+        "color",
+        new THREE.Float32BufferAttribute(cols, 3),
+      );
+      const edge = new THREE.LineLoop(edgeGeo, mobEdgeMat);
+      edge.frustumCulled = false;
+      edge.renderOrder = 2;
+      mobTilt.add(edge);
+      const edgeGlow = new THREE.LineLoop(edgeGeo, mobEdgeGlowMat);
+      edgeGlow.frustumCulled = false;
+      edgeGlow.renderOrder = 3;
+      mobTilt.add(edgeGlow);
+      // 光鞘三角带（与边界线同采样、逐点同源）
+      const shPos: number[] = [];
+      const shA: number[] = [];
+      const shIdx: number[] = [];
+      const shProf: Array<[number, number]> = [
+        [-0.07, 0.3],
+        [0, 1],
+        [0.17, 0],
+      ];
+      for (let i = 0; i < SEG; i++) {
+        const p = pts[i]!;
+        const d = dirs[i]!;
+        for (const [off, al] of shProf) {
+          shPos.push(
+            p.x + d.x * off,
+            p.y + d.y * off,
+            p.z + d.z * off,
+          );
+          shA.push(al);
+        }
+      }
+      for (let i = 0; i < SEG; i++) {
+        const a = i * 3;
+        const b = ((i + 1) % SEG) * 3;
+        shIdx.push(
+          a, b, a + 1, b, b + 1, a + 1,
+          a + 1, b + 1, a + 2, b + 1, b + 2, a + 2,
+        );
+      }
+      const shGeo = new THREE.BufferGeometry();
+      shGeo.setAttribute(
+        "position",
+        new THREE.Float32BufferAttribute(shPos, 3),
+      );
+      shGeo.setAttribute(
+        "aA",
+        new THREE.Float32BufferAttribute(shA, 1),
+      );
+      shGeo.setIndex(shIdx);
+      const sheath = new THREE.Mesh(shGeo, mobEdgeSheathMat);
+      sheath.frustumCulled = false;
+      sheath.renderOrder = 2;
+      mobTilt.add(sheath);
+    }
+    // —— 星扣 + 双带尾：粉白星芒五角星扣压在 ∞ 正中心交叉
+    // 点（两支错层相交处；渲染按开屏 00:06 双环中心的粉白
+    // 星芒光晕，工单七——旧金属金色作废），两条短带尾自扣
+    // 下垂落（一粉一蓝、随组轻摆）——
+    const mobClasp = new THREE.Group();
+    {
+      const c0 = mobCenterAt(MOB_U1, new THREE.Vector3());
+      // y 取两支错层（±0.06）的中位略上，星面压住交点
+      mobClasp.position.set(c0.x, 0.02, c0.z);
+    }
+    mobTilt.add(mobClasp);
+    const mobClaspStarMat = new THREE.MeshBasicMaterial({
+      color: 0xffe9f4,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    const mobClaspStar = ((): THREE.Mesh => {
+      const shape = new THREE.Shape();
+      for (let i = 0; i < 10; i++) {
+        const ang = (i / 10) * Math.PI * 2 + Math.PI / 2;
+        const rr = i % 2 === 0 ? 0.17 : 0.074;
+        const x = Math.cos(ang) * rr;
+        const y = Math.sin(ang) * rr;
+        if (i === 0) shape.moveTo(x, y);
+        else shape.lineTo(x, y);
+      }
+      shape.closePath();
+      const m = new THREE.Mesh(
+        new THREE.ShapeGeometry(shape),
+        mobClaspStarMat,
+      );
+      // 星面贴带面平面：局部 X→p 轴、Y→q 轴（3D (0, 0, −1)）、
+      // 法向 +Y；星尖朝 q+（向大环环心）
+      m.quaternion.setFromRotationMatrix(
+        new THREE.Matrix4().makeBasis(
+          new THREE.Vector3(1, 0, 0),
+          new THREE.Vector3(0, 0, -1),
+          new THREE.Vector3(0, 1, 0),
+        ),
+      );
+      m.renderOrder = 3;
+      mobClasp.add(m);
+      return m;
+    })();
+    const mobClaspGlowMat = new THREE.SpriteMaterial({
+      map: makeGlowTexture(
+        "rgba(255,238,246,0.95)",
+        "rgba(244,170,205,0.30)",
+      ),
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      depthTest: false,
+    });
+    const mobClaspGlow = new THREE.Sprite(mobClaspGlowMat);
+    // 特效增密轮：星扣光晕 0.6→0.85 并带慢呼吸（帧段驱
+    // 动 scale/opacity 的 ±7% 摆动，此处只是基准尺度）
+    mobClaspGlow.scale.set(0.85, 0.85, 1);
+    mobClaspGlow.renderOrder = 3;
+    mobClasp.add(mobClaspGlow);
+    const mobTailMats: THREE.MeshBasicMaterial[] = [];
+    const mobTails = new THREE.Group();
+    mobClasp.add(mobTails);
+    {
+      const tailDefs = [
+        {
+          dir: -0.55,
+          colRoot: new THREE.Color(0xf78fb8),
+          colTip: new THREE.Color(0xf3b7cd),
+        },
+        {
+          dir: 0.62,
+          colRoot: new THREE.Color(0x8fd0f5),
+          colTip: new THREE.Color(0xbcd9f2),
+        },
+      ];
+      for (const td of tailDefs) {
+        const SEG = 5;
+        const LEN = 0.52;
+        const pos: number[] = [];
+        const col: number[] = [];
+        const idx: number[] = [];
+        // 下垂向（(p, q) 面内、自星扣向外下方斜置）与面内垂向
+        const down = {
+          x: Math.sin(td.dir),
+          y: -Math.cos(td.dir),
+        };
+        const perp = { x: down.y, y: -down.x };
+        const cTmp = new THREE.Color();
+        for (let i = 0; i <= SEG; i++) {
+          const s = i / SEG;
+          const bend =
+            0.07 * Math.sin(s * Math.PI) * Math.sign(td.dir);
+          const cp = down.x * LEN * s + perp.x * bend;
+          const cq = down.y * LEN * s + perp.y * bend;
+          const hw = 0.062 * (1 - 0.45 * s);
+          cTmp.lerpColors(td.colRoot, td.colTip, s);
+          for (const sgn of [-1, 1]) {
+            pos.push(
+              cp + perp.x * hw * sgn,
+              -0.01 - 0.02 * s,
+              -(cq + perp.y * hw * sgn),
+            );
+            col.push(cTmp.r, cTmp.g, cTmp.b);
+          }
+        }
+        for (let i = 0; i < SEG; i++) {
+          const a = i * 2;
+          idx.push(a, a + 2, a + 1, a + 2, a + 3, a + 1);
+        }
+        const g = new THREE.BufferGeometry();
+        g.setAttribute(
+          "position",
+          new THREE.Float32BufferAttribute(pos, 3),
+        );
+        g.setAttribute(
+          "color",
+          new THREE.Float32BufferAttribute(col, 3),
+        );
+        g.setIndex(idx);
+        const mat = new THREE.MeshBasicMaterial({
+          vertexColors: true,
+          transparent: true,
+          opacity: 0,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        });
+        mobTailMats.push(mat);
+        const mesh = new THREE.Mesh(g, mat);
+        mesh.frustumCulled = false;
+        mesh.renderOrder = 2;
+        mobTails.add(mesh);
+      }
+    }
+    // 点按命中带（不可见、比带面宽 2.4 倍给指尖容差；材质
+    // visible:false 的命中体是本场既有口径，见太阳/行星命中圈）
+    const mobHitMat = new THREE.MeshBasicMaterial({ visible: false });
+    const mobHitBand = ((): THREE.Mesh => {
+      const pos: number[] = [];
+      const idx: number[] = [];
+      const tmp = new THREE.Vector3();
+      const HW = MOB_W * 1.2;
+      const SU = 120;
+      for (let i = 0; i <= SU; i++) {
+        const u = (i / SU) * Math.PI * 2;
+        const vFlip = i === SU ? -1 : 1;
+        for (let j = 0; j <= 1; j++) {
+          const v = (-HW + j * 2 * HW) * vFlip;
+          mobPoint(u, v, tmp);
+          pos.push(tmp.x, tmp.y, tmp.z);
+        }
+      }
+      for (let i = 0; i < SU; i++) {
+        const a = i * 2;
+        const b = a + 2;
+        idx.push(a, b, a + 1, b, b + 1, a + 1);
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute(
+        "position",
+        new THREE.Float32BufferAttribute(pos, 3),
+      );
+      g.setIndex(idx);
+      const m = new THREE.Mesh(g, mobHitMat);
+      m.frustumCulled = false;
+      mobTilt.add(m);
+      return m;
+    })();
+    // —— 行走光点 + 不对称标记（局部标架系：X = 切向 T（行进
+    // 方向）、Y = 横向 W、Z = 法向 N）：侧向箭鳍（鳍尖指 +W、
+    // 贴带面 +N 微抬）+ 偏置小球（−T/−W/+N 的尾侧上方）——
+    // 任一分量反号都看得出，W/N 同步反号时鳍尖与小球同时换边
+    const mobWalker = new THREE.Group();
+    mobTilt.add(mobWalker);
+    const mobFinMat = new THREE.MeshBasicMaterial({
+      color: 0xf6c9d4,
+      transparent: true,
+      opacity: 0,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    {
+      const shape = new THREE.Shape();
+      shape.moveTo(-0.1, -0.085);
+      shape.lineTo(0.1, -0.085);
+      shape.lineTo(0, 0.3);
+      shape.closePath();
+      const fin = new THREE.Mesh(
+        new THREE.ShapeGeometry(shape),
+        mobFinMat,
+      );
+      fin.position.z = 0.014;
+      fin.renderOrder = 3;
+      mobWalker.add(fin);
+    }
+    const mobCoreMat = new THREE.MeshBasicMaterial({
+      color: 0xfff5f7,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+    });
+    mobWalker.add(
+      new THREE.Mesh(
+        new THREE.SphereGeometry(0.045, 14, 10),
+        mobCoreMat,
+      ),
+    );
+    const mobBallMat = new THREE.MeshBasicMaterial({
+      color: 0xf0e9ec,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+    });
+    const mobBall = new THREE.Mesh(
+      new THREE.SphereGeometry(0.052, 14, 10),
+      mobBallMat,
+    );
+    mobBall.position.set(-0.15, -0.1, 0.075);
+    mobWalker.add(mobBall);
+    const mobGlowMat = new THREE.SpriteMaterial({
+      map: makeGlowTexture(
+        "rgba(255,221,231,0.95)",
+        "rgba(226,150,175,0.30)",
+      ),
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      depthTest: false,
+    });
+    const mobGlow = new THREE.Sprite(mobGlowMat);
+    mobGlow.scale.set(0.52, 0.52, 1);
+    mobGlow.renderOrder = 4;
+    mobWalker.add(mobGlow);
+    const mobHit = new THREE.Mesh(
+      new THREE.SphereGeometry(0.26, 8, 8),
+      mobHitMat,
+    );
+    mobWalker.add(mobHit);
+    const mobiusHitList: THREE.Object3D[] = [
+      mobHitBand,
+      mobHit,
+      mobClaspStar,
+    ];
+    // —— 光尘微粒（昔涟定调）：90 粒沿带面稀疏漂移，逐帧只
+    // 重算 90 个点位，廉价点云一张 ——
+    const MOB_DUST_N = 90;
+    const mobDustU = new Float32Array(MOB_DUST_N);
+    const mobDustV = new Float32Array(MOB_DUST_N);
+    const mobDustSp = new Float32Array(MOB_DUST_N);
+    const mobDustPos = new Float32Array(MOB_DUST_N * 3);
+    {
+      const tmp = new THREE.Vector3();
+      for (let i = 0; i < MOB_DUST_N; i++) {
+        mobDustU[i] = Math.random() * Math.PI * 2;
+        mobDustV[i] = (Math.random() * 2 - 1) * (MOB_W / 2) * 0.92;
+        mobDustSp[i] = 0.008 + Math.random() * 0.02;
+        mobPoint(mobDustU[i]!, mobDustV[i]!, tmp);
+        mobDustPos[i * 3] = tmp.x;
+        mobDustPos[i * 3 + 1] = tmp.y;
+        mobDustPos[i * 3 + 2] = tmp.z;
+      }
+    }
+    const mobDustGeo = new THREE.BufferGeometry();
+    mobDustGeo.setAttribute(
+      "position",
+      new THREE.Float32BufferAttribute(mobDustPos, 3),
+    );
+    const mobDustMat = new THREE.PointsMaterial({
+      map: makeGlowTexture(
+        "rgba(255,215,228,0.95)",
+        "rgba(240,170,190,0.25)",
+      ),
+      color: 0xffdbe6,
+      size: 0.08,
+      sizeAttenuation: true,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const mobDust = new THREE.Points(mobDustGeo, mobDustMat);
+    mobDust.frustumCulled = false;
+    mobDust.renderOrder = 2;
+    mobTilt.add(mobDust);
+    // —— 粉紫花瓣漂移（工单四补充 3，元灿亲自指定开屏参考；
+    // 工单七改色）：结周稀疏 6 片粉紫花瓣光斑（色相据开屏
+    // 00:56 转场飘落花瓣）——漂移域收在星扣（∞ 正中心交叉
+    // 点）邻域内：相位在 MOB_U1 ± 0.55 内各自小幅摆动、带
+    // 面外侧浮沉自旋，不沿整条 ∞ 路径巡游；与光尘/星形光
+    // 点并存，个位数精灵，不下花瓣雨。翻面迸散仍是水晶碎
+    // 片，花瓣只出现在这一处漂移
+    const MOB_PETAL_N = 6;
+    const mobPetalTex = ((): THREE.CanvasTexture => {
+      const c = document.createElement("canvas");
+      c.width = 64;
+      c.height = 64;
+      const g = c.getContext("2d")!;
+      const grad = g.createRadialGradient(32, 30, 2, 32, 32, 30);
+      grad.addColorStop(0, "rgba(250,215,255,0.95)");
+      grad.addColorStop(0.55, "rgba(216,150,235,0.55)");
+      grad.addColorStop(1, "rgba(190,120,230,0)");
+      g.fillStyle = grad;
+      g.beginPath();
+      g.moveTo(32, 4);
+      g.bezierCurveTo(50, 22, 52, 40, 32, 60);
+      g.bezierCurveTo(12, 40, 14, 22, 32, 4);
+      g.closePath();
+      g.fill();
+      return new THREE.CanvasTexture(c);
+    })();
+    interface MobPetal {
+      mat: THREE.SpriteMaterial;
+      sprite: THREE.Sprite;
+      baseU: number;
+      v: number;
+      oscAmp: number;
+      oscSpd: number;
+      spin: number;
+      bobPh: number;
+    }
+    const mobPetals: MobPetal[] = [];
+    for (let i = 0; i < MOB_PETAL_N; i++) {
+      const mat = new THREE.SpriteMaterial({
+        map: mobPetalTex,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+      });
+      const sprite = new THREE.Sprite(mat);
+      const size = 0.15 + (i % 3) * 0.05;
+      sprite.scale.set(size, size * 1.3, 1);
+      sprite.renderOrder = 3;
+      mobTilt.add(sprite);
+      mobPetals.push({
+        mat,
+        sprite,
+        baseU: MOB_U1 + (i - 2.5) * 0.22,
+        v: (i % 2 === 0 ? 1 : -1) * (0.3 + (i % 3) * 0.1),
+        oscAmp: 0.1 + (i % 3) * 0.06,
+        oscSpd: 0.11 + (i % 3) * 0.037,
+        spin: (i % 2 === 0 ? 1 : -1) * (0.3 + (i % 3) * 0.12),
+        bobPh: i * 1.71,
+      });
+    }
+    // —— 光点涟漪池（昔涟定调）：光点行进时身后在带面上扩散
+    // 的细涟漪环，池 6 枚 LineLoop，躺带面局部 T-W 平面内扩
+    // 散，半径到带宽量级时衰减消失 ——
+    const MOB_RIPPLE_N = 6;
+    const MOB_RIPPLE_LIFE = 2.6;
+    const mobRipples: {
+      line: THREE.LineLoop;
+      mat: THREE.LineBasicMaterial;
+      age: number;
+      active: boolean;
+    }[] = [];
+    {
+      const circ: THREE.Vector3[] = [];
+      for (let i = 0; i < 40; i++) {
+        const a = (i / 40) * Math.PI * 2;
+        circ.push(new THREE.Vector3(Math.cos(a), Math.sin(a), 0));
+      }
+      const circGeo = new THREE.BufferGeometry().setFromPoints(circ);
+      for (let i = 0; i < MOB_RIPPLE_N; i++) {
+        const mat = new THREE.LineBasicMaterial({
+          color: 0xfcc9d8,
+          transparent: true,
+          opacity: 0,
+          depthWrite: false,
+        });
+        const line = new THREE.LineLoop(circGeo, mat);
+        line.frustumCulled = false;
+        line.renderOrder = 2;
+        line.visible = false;
+        mobTilt.add(line);
+        mobRipples.push({ line, mat, age: 0, active: false });
+      }
+    }
+    let mobRippleTimer = 0;
+    let mobRippleIdx = 0;
+    // ════════════════════════════════════════════════════
+    // —— 特效增密轮（2026-11-15 晚，元灿：「环上移后空间
+    // 变大了，特效还要再加一些」）：五项全从 3.7 开屏视
+    // 觉语言里长（暖面金橙→绿→青蓝 / 冷面银白→粉紫 / 白
+    // 光边三系），不引入新花样；花瓣仍只许星扣邻域（本
+    // 轮新微粒是圆点星光、不作花瓣形、不出带周域）——
+    // ① 整环光场：沿 ∞ 中心线的宽幅辉光缎带（v ±1.05、
+    // 带面处平台、向外高斯漫开），带从此带着一片光场出
+    // 现，不再只有边缘发光；② 带周星光微粒：140 粒沿带
+    // 周空间稀疏漂浮（白/粉/蓝），慢漂移、不成团；③ 行
+    // 走光点长尾：光点身后 26 个采样点的渐隐光痕缎带
+    // （既有涟漪的延伸——涟漪是面上的环、长尾是身后的
+    // 痕）；④ 周期光脉冲：带面 shader 内一道光涌沿 ∞ 以
+    // 22 秒一圈缓行（常驻光流动的起伏，不是另一套系
+    // 统，见 mobBandMat 的 uPulseU）；⑤ 星扣光晕放大 +
+    // 慢呼吸（帧段驱动）。新增绘制：光场缎带 1 + 微粒
+    // 点云 1 + 长尾缎带 1 = 3，全廉价实现
+    // ════════════════════════════════════════════════════
+    const mobHaloMat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+      uniforms: {
+        uTime: { value: 0 },
+        uA: { value: 0 },
+      },
+      vertexShader: `
+        attribute float aU;
+        attribute float aV;
+        varying float vU;
+        varying float vV;
+        void main() {
+          vU = aU;
+          vV = aV;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }`,
+      fragmentShader: `
+        uniform float uTime;
+        uniform float uA;
+        varying float vU;
+        varying float vV;
+        vec3 mobWarmH(float x) {
+          vec3 c1 = vec3(1.0, 0.55, 0.12);
+          vec3 c2 = vec3(0.16, 0.92, 0.42);
+          vec3 c3 = vec3(0.16, 0.55, 1.0);
+          vec3 col = mix(c1, c2, smoothstep(0.0, 0.5, x));
+          return mix(col, c3, smoothstep(0.5, 1.0, x));
+        }
+        void main() {
+          float s = vU * 0.15915494;
+          float flow = fract(s - uTime * 0.03);
+          vec3 warm = mobWarmH(flow);
+          vec3 cool = mix(vec3(0.98), vec3(0.87, 0.48, 0.94), smoothstep(0.15, 0.95, fract(s + 0.35)));
+          vec3 col = gl_FrontFacing ? warm : cool;
+          // vV 以带缘为 ±1 归一（几何 v ±1.05、带半宽
+          // 0.2 → vV = v/0.2，带缘外即 |vV|>1）：带面平台
+          // 0.16、向外按 (0.55 带宽单位) 高斯漫开到 ±5.25
+          float d = max(0.0, abs(vV) - 1.0);
+          float a = 0.16 * exp(-pow(d / 2.75, 2.0));
+          gl_FragColor = vec4(col, a * uA);
+        }`,
+    });
+    {
+      const pos: number[] = [];
+      const aus: number[] = [];
+      const avs: number[] = [];
+      const idx: number[] = [];
+      const tmp = new THREE.Vector3();
+      const SEG_U = 240;
+      const SEG_V = 6;
+      const HALF = 1.05;
+      for (let i = 0; i <= SEG_U; i++) {
+        const u = (i / SEG_U) * Math.PI * 2;
+        const vFlip = i === SEG_U ? -1 : 1;
+        for (let j = 0; j <= SEG_V; j++) {
+          const vGrid = -HALF + (j / SEG_V) * HALF * 2;
+          mobPoint(u, vGrid * vFlip, tmp);
+          pos.push(tmp.x, tmp.y, tmp.z);
+          aus.push(u);
+          avs.push(vGrid / (MOB_W / 2));
+        }
+      }
+      for (let i = 0; i < SEG_U; i++) {
+        for (let j = 0; j < SEG_V; j++) {
+          const a = i * (SEG_V + 1) + j;
+          const b = a + SEG_V + 1;
+          idx.push(a, b, a + 1, b, b + 1, a + 1);
+        }
+      }
+      const haloGeo = new THREE.BufferGeometry();
+      haloGeo.setAttribute(
+        "position",
+        new THREE.Float32BufferAttribute(pos, 3),
+      );
+      haloGeo.setAttribute(
+        "aU",
+        new THREE.Float32BufferAttribute(aus, 1),
+      );
+      haloGeo.setAttribute(
+        "aV",
+        new THREE.Float32BufferAttribute(avs, 1),
+      );
+      haloGeo.setIndex(idx);
+      const halo = new THREE.Mesh(haloGeo, mobHaloMat);
+      halo.renderOrder = 0;
+      halo.frustumCulled = false;
+      mobTilt.add(halo);
+    }
+    // ② 带周星光微粒：沿带周（u 全程、v ±1.5、法向
+    // ±0.5）稀疏布点，逐帧小幅漂移（相位各自、振幅
+    // 0.05 内）——静态布点 + 漂移量在帧段
+    const MOB_SPARK_N = 140;
+    const mobSparkBase = new Float32Array(MOB_SPARK_N * 3);
+    const mobSparkPos = new Float32Array(MOB_SPARK_N * 3);
+    const mobSparkPh = new Float32Array(MOB_SPARK_N);
+    const mobSparkGeo = new THREE.BufferGeometry();
+    {
+      const tmp = new THREE.Vector3();
+      const fr: MobFrame = {
+        c: new THREE.Vector3(),
+        t: new THREE.Vector3(),
+        w: new THREE.Vector3(),
+        n: new THREE.Vector3(),
+      };
+      const cols = new Float32Array(MOB_SPARK_N * 3);
+      const palette: Array<[number, number, number]> = [
+        [1, 1, 1],
+        [1, 0.85, 0.9],
+        [0.75, 0.85, 1],
+        [1, 0.78, 0.85],
+      ];
+      for (let i = 0; i < MOB_SPARK_N; i++) {
+        const u = Math.random() * Math.PI * 2;
+        const v = (Math.random() * 2 - 1) * 1.5;
+        mobFrameAt(u, 0, fr);
+        tmp.copy(fr.c)
+          .addScaledVector(fr.w, v)
+          .addScaledVector(fr.n, (Math.random() * 2 - 1) * 0.5);
+        mobSparkBase[i * 3] = tmp.x;
+        mobSparkBase[i * 3 + 1] = tmp.y;
+        mobSparkBase[i * 3 + 2] = tmp.z;
+        mobSparkPos[i * 3] = tmp.x;
+        mobSparkPos[i * 3 + 1] = tmp.y;
+        mobSparkPos[i * 3 + 2] = tmp.z;
+        mobSparkPh[i] = Math.random() * Math.PI * 2;
+        const pc = palette[i % palette.length]!;
+        const bb = 0.55 + Math.random() * 0.45;
+        cols[i * 3] = pc[0] * bb;
+        cols[i * 3 + 1] = pc[1] * bb;
+        cols[i * 3 + 2] = pc[2] * bb;
+      }
+      mobSparkGeo.setAttribute(
+        "position",
+        new THREE.BufferAttribute(mobSparkPos, 3),
+      );
+      mobSparkGeo.setAttribute(
+        "color",
+        new THREE.BufferAttribute(cols, 3),
+      );
+    }
+    const mobSparkMat = new THREE.PointsMaterial({
+      map: makeGlowTexture(
+        "rgba(255,255,255,0.95)",
+        "rgba(255,220,235,0.25)",
+      ),
+      size: 0.085,
+      sizeAttenuation: true,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      vertexColors: true,
+    });
+    const mobSparks = new THREE.Points(mobSparkGeo, mobSparkMat);
+    mobSparks.frustumCulled = false;
+    mobSparks.renderOrder = 2;
+    mobTilt.add(mobSparks);
+    // ③ 行走光点长尾：历史采样（位置 + W 向）环形缓冲，
+    // 帧段按采样序拼渐隐缎带（aT：0 = 光点处、1 = 尾端）
+    const MOB_TRAIL_N = 26;
+    const mobTrailHist: Array<{
+      p: THREE.Vector3;
+      w: THREE.Vector3;
+    }> = [];
+    const mobTrailPos = new Float32Array(MOB_TRAIL_N * 2 * 3);
+    const mobTrailA = new Float32Array(MOB_TRAIL_N * 2);
+    for (let i = 0; i < MOB_TRAIL_N; i++) {
+      mobTrailA[i * 2] = i / (MOB_TRAIL_N - 1);
+      mobTrailA[i * 2 + 1] = i / (MOB_TRAIL_N - 1);
+    }
+    const mobTrailIdx: number[] = [];
+    for (let i = 0; i < MOB_TRAIL_N - 1; i++) {
+      const a = i * 2;
+      mobTrailIdx.push(a, a + 2, a + 1, a + 2, a + 3, a + 1);
+    }
+    const mobTrailGeo = new THREE.BufferGeometry();
+    mobTrailGeo.setAttribute(
+      "position",
+      new THREE.BufferAttribute(mobTrailPos, 3),
+    );
+    mobTrailGeo.setAttribute(
+      "aT",
+      new THREE.BufferAttribute(mobTrailA, 1),
+    );
+    mobTrailGeo.setIndex(mobTrailIdx);
+    const mobTrailMat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+      uniforms: { uA: { value: 0 } },
+      vertexShader: `
+        attribute float aT;
+        varying float vT;
+        void main() {
+          vT = aT;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }`,
+      fragmentShader: `
+        uniform float uA;
+        varying float vT;
+        void main() {
+          float a = pow(1.0 - vT, 2.0) * 0.5;
+          vec3 col = mix(vec3(1.0, 0.96, 0.98), vec3(0.96, 0.72, 0.82), vT);
+          gl_FragColor = vec4(col, a * uA);
+        }`,
+    });
+    const mobTrail = new THREE.Mesh(mobTrailGeo, mobTrailMat);
+    mobTrail.frustumCulled = false;
+    mobTrail.renderOrder = 2;
+    mobTilt.add(mobTrail);
+    let mobTrailLastU: number | null = null;
+    // —— 翻面迸散（昔涟定调 · 实机修订）：光点走完一圈翻面
+    // 瞬间迸出一小簇粉紫水晶碎片（细长八面体棱柱小片，品红
+    // 芯色/青色折射边色两组材质）向外飞散 + 一点白色星爆，
+    // 约 1.15 秒收净。实机没有花瓣雨——此处无任何花瓣/花朵
+    // 元素 ——
+    const MOB_SHARD_N = 14;
+    const MOB_BURST_LIFE = 1.15;
+    const mobShardGeo = new THREE.OctahedronGeometry(0.045);
+    const mobShardMats = [
+      new THREE.MeshBasicMaterial({
+        color: 0xe58fd0,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+      }),
+      new THREE.MeshBasicMaterial({
+        color: 0xa8e6f0,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+      }),
+    ];
+    const mobShards: {
+      mesh: THREE.Mesh;
+      vel: THREE.Vector3;
+      spin: THREE.Vector3;
+    }[] = [];
+    for (let i = 0; i < MOB_SHARD_N; i++) {
+      const mesh = new THREE.Mesh(
+        mobShardGeo,
+        mobShardMats[i % 2]!,
+      );
+      // 棱柱感：沿一轴拉长成细长水晶片
+      mesh.scale.set(0.55, 1.9, 0.55);
+      mesh.visible = false;
+      mesh.renderOrder = 3;
+      mobTilt.add(mesh);
+      mobShards.push({
+        mesh,
+        vel: new THREE.Vector3(),
+        spin: new THREE.Vector3(),
+      });
+    }
+    const mobStarMat = new THREE.SpriteMaterial({
+      map: makeGlowTexture(
+        "rgba(255,255,255,0.98)",
+        "rgba(255,240,248,0.35)",
+      ),
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      depthTest: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const mobStar = new THREE.Sprite(mobStarMat);
+    mobStar.renderOrder = 4;
+    mobStar.visible = false;
+    mobTilt.add(mobStar);
+    let mobBurstAge = MOB_BURST_LIFE + 1;
+    let mobBurstCount = 0;
+    const mobSpawnBurst = (
+      origin: THREE.Vector3,
+      tv: THREE.Vector3,
+      wv: THREE.Vector3,
+      nv: THREE.Vector3,
+    ): void => {
+      for (const sh of mobShards) {
+        sh.mesh.position.copy(origin);
+        const a = Math.random() * 0.9 - 0.2;
+        const b = Math.random() * 1.6 - 0.8;
+        const c = Math.random() * 0.9 + 0.1;
+        const sp = 0.12 + Math.random() * 0.3;
+        sh.vel
+          .set(0, 0, 0)
+          .addScaledVector(tv, a)
+          .addScaledVector(wv, b)
+          .addScaledVector(nv, c)
+          .normalize()
+          .multiplyScalar(sp);
+        sh.spin.set(
+          (Math.random() - 0.5) * 9,
+          (Math.random() - 0.5) * 9,
+          (Math.random() - 0.5) * 9,
+        );
+        sh.mesh.rotation.set(
+          Math.random() * Math.PI,
+          Math.random() * Math.PI,
+          Math.random() * Math.PI,
+        );
+        sh.mesh.visible = true;
+      }
+      mobStar.position.copy(origin);
+      mobStar.visible = true;
+      mobBurstAge = 0;
+      mobBurstCount++;
+    };
+    // —— 点选小卡（故事层款式：玫瑰色调底 + 细边，与数据层蓝
+    // 玻璃卡分家；与彗星名卡同层 starLabelLayer、指针穿透，点
+    // 别处/再点带体收起，见 handleTap 与 animate 莫比乌斯段）——
+    const mobCard = document.createElement("div");
+    mobCard.style.position = "absolute";
+    mobCard.style.left = "12px";
+    mobCard.style.bottom = "64px";
+    mobCard.style.maxWidth = "min(78vw, 340px)";
+    mobCard.style.padding = "9px 11px";
+    mobCard.style.borderRadius = "10px";
+    mobCard.style.background = "rgba(30,15,24,0.80)";
+    mobCard.style.border = "1px solid rgba(240,180,200,0.45)";
+    mobCard.style.boxShadow =
+      "inset 0 1px 0 rgba(255,210,225,0.10), 0 2px 10px rgba(10,2,8,0.40)";
+    mobCard.style.fontFamily = "'Noto Sans SC', system-ui, sans-serif";
+    mobCard.style.opacity = "0";
+    mobCard.style.visibility = "hidden";
+    mobCard.style.willChange = "transform, opacity";
+    {
+      const head = document.createElement("div");
+      head.style.display = "flex";
+      head.style.alignItems = "baseline";
+      head.style.gap = "8px";
+      const title = document.createElement("span");
+      title.textContent = "莫比乌斯带";
+      title.style.fontSize = "13px";
+      title.style.fontWeight = "600";
+      title.style.letterSpacing = "0.04em";
+      title.style.color = "rgba(252,238,243,0.97)";
+      const tag = document.createElement("span");
+      tag.textContent = "故事层 · 意象";
+      tag.style.fontSize = "9px";
+      tag.style.letterSpacing = "0.08em";
+      tag.style.color = "#f0a8c0";
+      tag.style.border = "1px solid rgba(240,168,192,0.5)";
+      tag.style.borderRadius = "999px";
+      tag.style.padding = "1px 6px";
+      head.appendChild(title);
+      head.appendChild(tag);
+      mobCard.appendChild(head);
+      const lines = [
+        "莫比乌斯带只有一个面，沿它走完一圈，左右会翻转过来。",
+        "它的「闭合版」是克莱因瓶，由两个莫比乌斯带粘合而成。",
+        "宇宙整体可能有这类拓扑，但这仍是尚未被观测证实的假说；本元素是意象客串，不是数据。",
+        "意象取自《崩坏：星穹铁道》昔涟与翁法罗斯的回环——原型是她右腕所戴、象征翁法罗斯的莫比乌斯手环；她终结技的名字里就写着「∞」；质感取自 3.7 开屏动画。",
+      ];
+      for (const text of lines) {
+        const p = document.createElement("p");
+        p.textContent = text;
+        p.style.margin = "4px 0 0";
+        p.style.fontSize = "11px";
+        p.style.lineHeight = "1.55";
+        p.style.color = "rgba(238,214,224,0.92)";
+        mobCard.appendChild(p);
+      }
+    }
+    starLabelLayer.appendChild(mobCard);
+    // 莫比乌斯状态（animate 逐帧写、handleTap 读写选中态）
+    // mobiusSelected 管小卡、迸散与带的高亮（2026-11-16
+    // 元灿令「高亮可以改成点击后」：提亮改回点击触发——
+    // mobSelK 向选中态趋近/回落，系数在常态基值与原点选
+    // 态数值之间插值，点带提亮、关卡回落；此前一轮的常驻
+    // 提亮作废）。流动光不读选中态：自 2026-11-16 更正轮
+    // 起由时钟直推常开，点选与关卡都停不了它——高亮管点
+    // 击、流动管恒在，两回事
+    let mobiusSelected = false;
+    /** 高亮趋近量 0=常态 / 1=点选提亮态（帧段逐帧趋近） */
+    let mobSelK = 0;
+    let mobiusVisNow = 0;
+    let mobCardK = 0;
+    let mobPhaseOverride: number | null = null;
+    // 常驻流动光无点选状态（更正轮）：相位由帧段会话时钟
+    // 直推（mobWaveMat.uFlowU），旧点选涟漪的进度/方向/原
+    // 点/命中相位状态整套退役——点带只剩弹卡与迸散
+    let mobPrevLoopFloor: number | null = null;
+    const mobTmpV = new THREE.Vector3();
+    const mobC = new THREE.Vector3();
+    const mobTan = new THREE.Vector3();
+    const mobWv = new THREE.Vector3();
+    const mobNv = new THREE.Vector3();
+    const mobBasisM = new THREE.Matrix4();
+    const mobFrame: MobFrame = {
+      c: new THREE.Vector3(),
+      t: new THREE.Vector3(),
+      w: new THREE.Vector3(),
+      n: new THREE.Vector3(),
+    };
+    const mobState: {
+      uDeg: number;
+      loops: number;
+      vis: number;
+      selected: boolean;
+      periodS: number;
+      pos: [number, number, number];
+      burstCount: number;
+      ripplesActive: number;
+      waveT: number;
+      /** 星扣相位（度）：光点相位跨过它即过扣翻面 */
+      claspDeg: number;
+      /** 结周漂移的粉紫花瓣片数（工单四口径：个位数） */
+      petalCount: number;
+    } = {
+      uDeg: 0,
+      loops: 0,
+      vis: 0,
+      selected: false,
+      periodS: MOB_PERIOD_S,
+      pos: [0, 0, 0],
+      burstCount: 0,
+      ripplesActive: 0,
+      waveT: -1,
+      claspDeg: (MOB_U1 * 180) / Math.PI,
+      petalCount: MOB_PETAL_N,
+    };
+    (window as unknown as Record<string, unknown>).__financeGlobeMobius =
+      {
+        state: () => ({ ...mobState, pos: [...mobState.pos] }),
+        // 确定性跳相位（入参 = 圈数，可带小数；null 回会话时钟）：
+        // 跳相位期间整体自转冻结，同一 u 的两帧空间位置恒等，
+        // 只剩标架翻转差异——翻面对比帧的取帧口径
+        setPhase: (loops: number | null) => {
+          mobPhaseOverride = loops;
+        },
+        select: (v: boolean) => {
+          mobiusSelected = v;
+        },
+        // 翻面迸散确定性触发（验收取帧用）：在光点当前标架处
+        // 迸散一簇，与走完一圈的自动迸散同一通道
+        burst: () => {
+          const q = mobWalker.quaternion;
+          const tv = new THREE.Vector3(1, 0, 0).applyQuaternion(q);
+          const wv = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
+          const nv = new THREE.Vector3(0, 0, 1).applyQuaternion(q);
+          mobSpawnBurst(mobWalker.position, tv, wv, nv);
+        },
+        // 光点屏幕坐标（画布相对 px，探针据此发真实点按）
+        walkerPx: () => {
+          const rect = el.getBoundingClientRect();
+          const v = new THREE.Vector3();
+          mobWalker.getWorldPosition(v);
+          v.project(camera);
+          return {
+            x: ((v.x + 1) / 2) * rect.width,
+            y: ((1 - v.y) / 2) * rect.height,
+            behind: v.z >= 1,
+          };
+        },
+        // 星扣屏幕坐标（画布相对 px）：星扣前后取帧/点按用
+        claspPx: () => {
+          const rect = el.getBoundingClientRect();
+          const v = new THREE.Vector3();
+          mobClasp.getWorldPosition(v);
+          v.project(camera);
+          return {
+            x: ((v.x + 1) / 2) * rect.width,
+            y: ((1 - v.y) / 2) * rect.height,
+            behind: v.z >= 1,
+          };
+        },
+        // 任意圈数处的标架数值（离线核验翻面用：同一 loops
+        // 小数部分、圈数差 1 时 pos 恒等、w/n 严格反号）
+        frameAt: (loops: number) => {
+          const u = MOB_U0 + loops * Math.PI * 2;
+          const circ = Math.floor(u / (Math.PI * 2));
+          const fr: MobFrame = {
+            c: new THREE.Vector3(),
+            t: new THREE.Vector3(),
+            w: new THREE.Vector3(),
+            n: new THREE.Vector3(),
+          };
+          mobFrameAt(mobWrapU(u), circ, fr);
+          return {
+            pos: [fr.c.x, fr.c.y, fr.c.z],
+            t: [fr.t.x, fr.t.y, fr.t.z],
+            w: [fr.w.x, fr.w.y, fr.w.z],
+            n: [fr.n.x, fr.n.y, fr.n.z],
+          };
+        },
+      };
     await sl.yieldNow();
     // —— 客串彗星（夜空四单 · 太阳系故事层，2026-11-12；设计稿 =
     // goal-5 GOAL.md「客串彗星设计」）——
@@ -8375,7 +11930,7 @@ export function Globe({
     // 眨眼的细碎星点（片着色器内网格星屑，见 fragment 注），
     // 尾巴是「光做的、里面有星星在闪」，不是染色的布。本工厂
     // 因此改收多停点色板（现行版见本段末「报告 §3 落地」注：
-    // uCols/uOffs 5 停点、逐颗偏移），全四颗具名彗星同语
+    // uCols/uOffs 5 停点、逐颗偏移），全五颗具名彗星同语
     // 系、逐颗差异仍走宽度/不透明度/射线/波幅参数。
     // —— 真机黑带根因与渲染路径重置（2026-11-13 用户真机实
     // 报：潘斯达斯尘埃尾在 iPhone Air 上是一条纯黑、遮挡轨道
@@ -8394,7 +11949,7 @@ export function Globe({
     // 颜色不预乘、衰减全走真实 alpha（vec4(col, a)）+ 普通
     // alpha 混合——与同屏在真机已验证正常的轨道线/辉光精灵
     // 同一条路径；a→0 处结构上只会透明，黑带不可能重现。
-    // 四颗具名彗星共用本工厂；近日点喷流（makeCometSparks）
+    // 五颗具名彗星共用本工厂；近日点喷流（makeCometSparks）
     // 同为预乘 + alpha 1 写法，同轮一并换契约。
     // —— 本轮（2026-11-13 晚，用户三度判尾：「颜色能参考新海
     // 诚了吗 / 拖尾还是太单调了和细了」+ 逐颗分家总纲）：
@@ -8745,7 +12300,8 @@ export function Globe({
     // 1 哈雷冰晶 白→冰青→深蓝（晶莹规整）/ 2 恩克灰烬 白灰→
     // 灰蓝→暗板岩（黯淡慢小）/ 3 潘斯达斯金尘 奶白→金→琥珀
     // （大粒慢飘的尘雾）/ 4 艾森翠绿 白绿→翠绿→深青绿（快而
-    // sharp）；速度/尺寸/亮度系数逐颗走 def。绘制账：每颗 1
+    // sharp）/ 5 坦普尔冰刃 纯白→冰青→靛紫（小粒快而亮的针
+    // 点）；速度/尺寸/亮度系数逐颗走 def。绘制账：每颗 1
     // 次 Points 绘制、粒数 95–210（def.sparkCount），顶点着色
     // 器内全程序化、CPU 逐帧只写 6 个 uniform。
     const makeCometSparks = (
@@ -8850,7 +12406,8 @@ export function Globe({
           "  vec3 cOld = vec3(0.14, 0.34, 0.95);",
           "  if (uMode > 1.5 && uMode < 2.5) { cNew = vec3(0.96, 0.97, 0.96); cMid = vec3(0.58, 0.65, 0.73); cOld = vec3(0.33, 0.40, 0.49); }",
           "  else if (uMode > 2.5 && uMode < 3.5) { cNew = vec3(1.0, 0.98, 0.90); cMid = vec3(1.0, 0.85, 0.55); cOld = vec3(0.78, 0.56, 0.24); }",
-          "  else if (uMode > 3.5) { cNew = vec3(0.94, 1.0, 0.96); cMid = vec3(0.25, 0.91, 0.68); cOld = vec3(0.04, 0.56, 0.43); }",
+          "  else if (uMode > 3.5 && uMode < 4.5) { cNew = vec3(0.94, 1.0, 0.96); cMid = vec3(0.25, 0.91, 0.68); cOld = vec3(0.04, 0.56, 0.43); }",
+          "  else if (uMode > 4.5) { cNew = vec3(1.0, 1.0, 1.0); cMid = vec3(0.60, 0.88, 1.0); cOld = vec3(0.42, 0.38, 0.92); }",
           "  vec3 col = mix(cNew, cMid, smoothstep(0.05, 0.45, vAge));",
           "  col = mix(col, cOld, smoothstep(0.45, 1.0, vAge) * (0.35 + 0.65 * uIntensity));",
           "  col *= (1.0 + 0.6 * uIntensity) * uBright;",
@@ -8875,8 +12432,8 @@ export function Globe({
     // 中表、淡入随 sunFade；但与客串不同，它们各有真实轨道线与
     // 名卡（用户令「要有名字的卡片」）。本体绘制账逐颗 = 核球 1
     // + 彗发精灵 3 + 双尾光幕（离子 2 层 + 尘埃 2–3 层、共享 1 张
-    // 几何）+ 近日点冰晶喷流 1 + 轨道线 1，四颗合计 ≈30 次绘
-    // 制；无变红燃烧（物理色口径，见模块层注），但近日点粒子
+    // 几何）+ 近日点冰晶喷流 1 + 轨道线 1，五颗合计 ≈38 次绘
+    // 制（任一时刻只一颗在场、实绘只一份）；无变红燃烧（物理色口径，见模块层注），但近日点粒子
     // 喷流已补回（2026-11-13，冰晶版，见下方 sparks 处注）。
     // 名卡与背景八星同层（starLabelLayer、z 6 最高层级），但
     // 款式独立：彗星名卡带真实信息副行（周期/下次回归/解体），
@@ -8961,15 +12518,16 @@ export function Globe({
       // 双尾光帘：同一工厂、逐颗全套参数分家（见 def 表）——尾
       // 色走各自色板（def.ionPalette/dustPalette）+ 各自描边色；
       // 射线密度/波幅按性格给：哈雷标准、恩克弱化、潘斯达斯尘
-      // 埃射线更疏更飘、艾森离子射线最密最稳（极细长直帘）
+      // 埃射线更疏更飘、艾森离子射线最密最稳（极细长直帘）、
+      // 坦普尔次密而稳（窄直冰刃，波幅压到 0.009 不飘）
       const ion = makeTailCurtain(
         def.ionPalette,
         def.ionRim,
         def.ionLayers,
-        def.id === "ison" ? 190 : 150,
+        def.id === "ison" ? 190 : def.id === "tempel" ? 180 : 150,
         0.55,
-        def.id === "ison" ? 0.008 : 0.012,
-        def.id === "ison" ? 1.3 : 1.15,
+        def.id === "ison" ? 0.008 : def.id === "tempel" ? 0.009 : 0.012,
+        def.id === "ison" ? 1.3 : def.id === "tempel" ? 1.25 : 1.15,
         def.ionWidth,
         group,
       );
@@ -9971,14 +13529,15 @@ export function Globe({
     // 动锁判定据此放行自身、且不执行指针路的驱动释放。
     let gestureDriver: "none" | "pointer" | "touch" = "none";
     let feedingTouch = false;
-    // 邻域拖拽 1:1 直连的基准重锚：落指时快照当刻的偏航/倾
-    // 角目标；首次越过拖动阈值的那一帧，把目标重锚到「当
+    // 邻域拖拽 1:1 直连的基准重锚：落指时快照当刻的偏航
+    // 目标；首次越过拖动阈值的那一帧，把目标重锚到「当
     // 前实际角 + 本次手势已累积的目标位移」——入场摆入若尚
     // 未落定就被抓握，直连从当前画面角起步，不跳帧；纯点
-    // 按从不越阈、不触发重锚，入场摆入不被点按打断。
+    // 按从不越阈、不触发重锚，入场摆入不被点按打断。极角
+    // 自 2026-11-15 晚纯方位角轮起不在重锚之列：邻域拖动
+    // 根本不写极角目标，快照里不再有 galDragTiltT0。
     let galDragRebasePending = false;
     let galDragYawT0 = 0;
-    let galDragTiltT0 = 0;
     /** 指针路的手势收尾释放驱动锁（兜底喂入的事件不走此路） */
     const releaseGestureDriver = () => {
       if (!feedingTouch) gestureDriver = "none";
@@ -10138,7 +13697,6 @@ export function Globe({
         stateRef.current.galaxyView !== "full"
       ) {
         galDragYawT0 = galYawT;
-        galDragTiltT0 = galTiltT;
         galDragRebasePending = true;
       } else {
         galDragRebasePending = false;
@@ -10218,31 +13776,32 @@ export function Globe({
         Math.hypot(e.clientX - downX, e.clientY - downY),
       );
       if (e.pointerType === "touch") {
-        // 银河邻域单指环视（本轮拖动修正）：不走下方方向锁——横
-        // 纵两轴都消费（横 = 绕太阳环视偏航、纵 = 俯仰），只写目
-        // 标、帧段阻尼落笔，极角夹取不翻转；画布 touch-action
-        // 已在邻域在位时切 none（帧段同步），浏览器不会把纵拖
-        // 接管成页面滚动。旧逻辑在邻域里的实查缺陷：①纵拖被方
-        // 向锁判给页面滚动（或判横向后把纵向分量整段丢弃），邻
-        // 域里倾不了角；②横拖转的是盘面自转角——邻域看着像原
-        // 地转一张地图，不是绕太阳环视；③捏合写全览缩放、在邻
-        // 域取景下视觉空操作（已在捏合段分流纠正）
+        // 银河邻域单指环视：不走下方方向锁——手势整场被邻域
+        // 消费（画布 touch-action 已在邻域在位时切 none、帧段
+        // 同步，浏览器不会把纵拖接管成页面滚动），但只有横向
+        // 分量进视角：横 = 绕太阳环视偏航（增益 0.005），纵向
+        // 分量整段不写任何状态——极角恒等于入场极角（2026-
+        // 11-15 晚纯方位角轮，用户：「只左右旋转，不要加上
+        // 下」；旧 pitch 通道 0.003 + 夹取 [0.15, 1.35] 在邻
+        // 域停用）。只写目标、帧段阻尼落笔。旧逻辑在邻域里的
+        // 实查缺陷（拖动修正轮）：①纵拖被方向锁判给页面滚动
+        // （或判横向后把纵向分量整段丢弃）；②横拖转的是盘面
+        // 自转角——邻域看着像原地转一张地图，不是绕太阳环
+        // 视；③捏合写全览缩放、在邻域取景下视觉空操作（已在
+        // 捏合段分流纠正）
         if (gTrans > 0.5 && stateRef.current.galaxyView !== "full") {
           if (moved > 4) {
             userHold = true;
             if (galDragRebasePending) {
-              // 直连重锚（取证轮）：首次越阈先把目标搬到当前
-              // 实际角 + 已累积位移上，再吃本帧增量——帧段直
-              // 连赋值（galYaw = galYawT）从这一帧起严丝合缝，
-              // 入场摆入未落定时被抓握也不跳帧
+              // 直连重锚（取证轮）：首次越阈先把偏航目标搬到
+              // 当前实际角 + 已累积位移上，再吃本帧增量——帧
+              // 段直连赋值（galYaw = galYawT）从这一帧起严丝
+              // 合缝，入场摆入未落定时被抓握也不跳帧。极角目
+              // 标不参与重锚：它恒为入场极角、拖动不许碰
               galDragRebasePending = false;
               galYawT = galYaw + (galYawT - galDragYawT0);
-              galTiltT = galNearPolClamp(
-                galTilt + (galTiltT - galDragTiltT0),
-              );
             }
             galYawT += dx * 0.005;
-            galTiltT = galNearPolClamp(galTiltT + dy * 0.003);
             galVelY = dx * 0.005;
           }
           return;
@@ -10282,18 +13841,16 @@ export function Globe({
         userHold = true;
         if (gTrans > 0.5) {
           if (stateRef.current.galaxyView !== "full") {
-            // 邻域环视（与触摸同语法）：绕太阳偏航 + 俯仰，只写
-            // 目标、帧段落笔，极角夹取不翻转；直连重锚与触摸
-            // 路同一口径（取证轮，首次越阈搬目标到当前实际角）
+            // 邻域环视（与触摸同语法）：只有绕太阳偏航——纵向
+            // 分量不进视角、极角恒等于入场极角（2026-11-15 晚
+            // 纯方位角轮）；只写目标、帧段落笔；直连重锚与触
+            // 摸路同一口径（取证轮，首次越阈搬偏航目标到当前
+            // 实际角，极角目标不参与）
             if (galDragRebasePending) {
               galDragRebasePending = false;
               galYawT = galYaw + (galYawT - galDragYawT0);
-              galTiltT = galNearPolClamp(
-                galTilt + (galTiltT - galDragTiltT0),
-              );
             }
             galYawT += dx * 0.005;
-            galTiltT = galNearPolClamp(galTiltT + dy * 0.003);
           } else {
             // 全览：横拖绕银轴转盘、纵拖调俯角（目标制 + 帧段阻
             // 尼，旧实现直写组旋转无阻尼）
@@ -10403,11 +13960,85 @@ export function Globe({
         pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
         pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
         raycaster.setFromCamera(pointer, camera);
-        // 银河系模式：只认太阳标记——点它在全盘 ↔ 太阳邻域之间
-        // 切换（与 App 底栏的全览/邻域钮同一状态）；点空处不触发
-        // 任何事。判定走屏幕圆盘兜底（标记的世界坐标按自转角现
-        // 算投影），与天体第二下点按同一口径
+        // 银河系模式点按（2026-11-15 改判，用户亲述逻辑为准：
+        // 「点太阳系不该退出、点银心才回银河」——旧实现邻域里点
+        // 太阳标记与全览共用一条互切，点太阳系就被弹出邻域）：
+        // · 全览：点太阳标记 → 进太阳邻域（与邻域点银心回全览
+        //   正好对称：点哪个中心去哪个尺度；底栏钮仍是明路）
+        // · 邻域：点银心罗盘标记（含名签热区）→ 回银河全览；
+        //   点太阳系标记（引力井 + 「太阳系」签）→ 只把镜头回
+        //   正到入场朝向与默认倍率，绝不退出邻域
+        // · 点空处不触发任何事。判定走屏幕距离（标记的世界坐
+        //   标投影 / 帧段登记的罗盘落位），与天体点按同一口径
         if (gTrans > 0.5) {
+          const tapX = clientX - rect.left;
+          const tapY = clientY - rect.top;
+          if (stateRef.current.galaxyView !== "full") {
+            // —— 邻域内改判 ——
+            // ① 银心罗盘：标记圆盘热区（半径 30px，标记本体
+            // 36px + 呼吸环圈内）或名签矩形热区（签宽 168px /
+            // 高约 38px，各留一点余量）→ 回全览（走既有邻域
+            // 混合的连续镜头，不跳变）
+            const cs2 = galCompassState;
+            if (cs2.mkPxX >= 0) {
+              const dMk = Math.hypot(
+                tapX - cs2.mkPxX,
+                tapY - cs2.mkPxY,
+              );
+              const inCompassLabel =
+                Math.abs(tapX - cs2.lbPxX) <= 92 &&
+                Math.abs(tapY - cs2.lbPxY) <= 26;
+              if (dMk <= 30 || inCompassLabel) {
+                stateRef.current.onGalaxyViewChange?.("full");
+                return;
+              }
+            }
+            // ② 太阳系标记：太阳恒钉画面中心（枢轴不变量），
+            // 引力井足迹按井口 1.2 pc 的默认帧投影约 90px 半
+            // 径取热区；「太阳系」签按其精灵实际世界位投影取
+            // 矩形热区。命中 = 回正：与入场边沿同一套解算只写
+            // 目标（偏航/极角/倍率），帧段阻尼平滑落位、不跳
+            // 帧；galaxyView 一字不动，构造上不可能退出邻域
+            galaxyGroup.updateMatrixWorld(true);
+            const sunV = galaxySunWorld.clone().project(camera);
+            if (sunV.z < 1) {
+              const sunPxX = ((sunV.x + 1) / 2) * rect.width;
+              const sunPxY = ((1 - sunV.y) / 2) * rect.height;
+              const dSun = Math.hypot(
+                tapX - sunPxX,
+                tapY - sunPxY,
+              );
+              let inSunLabel = false;
+              if (galSunLabel) {
+                const lv = new THREE.Vector3();
+                galSunLabel.getWorldPosition(lv);
+                lv.project(camera);
+                if (lv.z < 1) {
+                  const lbX = ((lv.x + 1) / 2) * rect.width;
+                  const lbY = ((1 - lv.y) / 2) * rect.height;
+                  inSunLabel =
+                    Math.abs(tapX - lbX) <= 62 &&
+                    Math.abs(tapY - lbY) <= 22;
+                }
+              }
+              if (dSun <= 92 || inSunLabel) {
+                galVelY = 0;
+                const entryPol = galEntryPol(galaxySpin.rotation.y);
+                galTiltT = entryPol;
+                const targetYaw = galEntryYaw(
+                  galaxySpin.rotation.y,
+                  entryPol,
+                );
+                let dYaw = (targetYaw - galYaw) % (Math.PI * 2);
+                if (dYaw > Math.PI) dYaw -= Math.PI * 2;
+                if (dYaw < -Math.PI) dYaw += Math.PI * 2;
+                galYawT = galYaw + dYaw;
+                galaxyNearZoomT = 11;
+              }
+            }
+            return;
+          }
+          // —— 全览：点太阳标记进邻域 ——
           const cs = Math.cos(galaxySpin.rotation.y);
           const sn = Math.sin(galaxySpin.rotation.y);
           const sp = galSunBase.clone();
@@ -10427,12 +14058,7 @@ export function Globe({
               clientY - rect.top - sy,
             );
             if (tapPx <= 56) {
-              // 全览 ↔ 太阳邻域互切（与底栏钮同一状态源；近邻特
-              // 写档已下线，不再逐级深入）
-              const gv = stateRef.current.galaxyView;
-              stateRef.current.onGalaxyViewChange?.(
-                gv === "full" ? "near" : "full",
-              );
+              stateRef.current.onGalaxyViewChange?.("near");
             }
           }
           return;
@@ -10443,6 +14069,19 @@ export function Globe({
         // 是监控球 sphere，单独并入判定。
         if (trans > 0.5) {
           raycaster.camera = camera; // 精灵（标签）射线检测需要
+          // 莫比乌斯带客串命中（故事层，见构建段）：先算命中、
+          // 最后裁决——下方行星命中（聚焦优先/通用命中/地球球
+          // 体）全部优先于它，既有点按行为零改动；只有点空处
+          // 时才由它接：命中带体/光点 → 切换小卡，未命中 → 收
+          // 起小卡。带体只在全览在位（mobiusVisNow > 0.5）时
+          // 可点，近览/聚焦/银河恒不触发
+          const mobHitObjs =
+            mobiusVisNow > 0.5
+              ? raycaster.intersectObjects(mobiusHitList, false)
+              : [];
+          const mobHit = mobHitObjs.length > 0;
+          // 旧「命中点换算带面相位」是点选涟漪的扩散原点——
+          // 流动光改常驻时钟驱动后无消费者，整段退役（更正轮）
           // 已聚焦天体优先（真机修复之二）：聚焦后相机已飞近，第二下
           // 点按先测这颗天体自己的命中体（本体+命中圈+标签，递归含
           // 子命中圈）；仍落空时再用屏幕投影圆盘兜底——点落在它画面
@@ -10487,14 +14126,19 @@ export function Globe({
             (h) => typeof h.object.userData.bodyId === "string",
           );
           if (hit) {
+            mobiusSelected = false;
             stateRef.current.onBodyFocus?.(
               hit.object.userData.bodyId as string,
             );
             return;
           }
           if (raycaster.intersectObject(sphere, false).length) {
+            mobiusSelected = false;
             stateRef.current.onBodyFocus?.("earth");
+            return;
           }
+          // 点空处：莫比乌斯带最后裁决（命中切换小卡、未命中收起）
+          mobiusSelected = mobHit ? !mobiusSelected : false;
           return;
         }
         // 主页星球模式：地球节点图层不存在，只认星球本体——
@@ -10867,6 +14511,15 @@ export function Globe({
      * 聚焦任何行星时都归零，连线图随之淡出淡入，语法与标签
      * 避让的平滑淡变一致，绝不硬跳 */
     let zodiacFigK = 0;
+    /** 彗星近览在位系数（2026-11-15 晚，用户：「全览隐藏
+     * 彗星、星街彗星也隐藏」）：与 zodiacFigK 镜像的一对门
+     * 控——有效近览（solarNarrow && solarView=near，与太阳
+     * 系拟合距离同一条判定、桌面恒全览）时为 1、有效全览
+     * 时为 0，指数趋近同语法（dt×3.2、约 1 秒走完、不闪不
+     * 跳）。五颗具名彗星的整层淡化与星街彗星的本体/标签/
+     * 专属光效同乘此系数；舞台钟 stageMt 不受门控影响、全
+     * 览↔近览切换不重置，进近览即是当时幕位的那一颗 */
+    let cometViewK = 0;
     let prevSolarView = stateRef.current.solarView;
     let lastSunCalc = -99;
     let sunDateCache = new Date();
@@ -12298,7 +15951,18 @@ export function Globe({
       life: number;
       len: number;
       w: number;
-      fire: boolean;
+      /** 亮度阶级（2026-11-16 狮子座注入，取代旧 fire 布尔；
+       * 当晚修订：火流星缩小并改火球形态、蓝绿改针形且速度回
+       * 普通档、两阶级占比调低）：
+       * 0 普通 / 1 明亮（旧火流星放大口径：同色系 1.6–2× 更亮
+       * 更大）/ 2 火流星（新阶级：⑥ 档橙红燃烧色、不规则抖动
+       * 火球头 + 断续光团尾 + 持久余迹 + 沿途火花/碎块剥落 +
+       * 末端闪爆；头光盖印与普通同量级，亮度靠强度不靠个头）
+       * / 3 蓝绿（新阶级：⑤ 档蓝绿实色、针形细直锐 streak +
+       * 紧致小头、尾迹收束；速度与普通同档至多略快，身份靠颜
+       * 色＋针形不靠速度）。最高阶不在此列——抽中最高阶直接
+       * 顶替为陨石（curtainRocks），规则不变 */
+      cls: 0 | 1 | 2 | 3;
       /** 配色变体档位（CURTAIN_VARIANTS 下标，生成时按权重抽定） */
       v: number;
       /** 该档渐变各停点的 rgb 串（生成时已按 ±5% 逐通道预抖） */
@@ -12311,6 +15975,9 @@ export function Globe({
       shed: number;
       /** 头部星芒 glint 的逐颗计时器（秒）：头部偶发一闪即过的星芒 */
       glint: number;
+      /** 火流星特效累加器（秒，仅 cls=2 用）：每约 0.05 秒在头
+       * 后落一团余迹 + 剥落一粒火花 */
+      fxAcc: number;
     };
     const curtainMeteors: CurtainMeteor[] = [];
     // —— 陨石（2026-11-13 新增，设计口径见 rockSprites 处注）：
@@ -12322,8 +15989,23 @@ export function Globe({
     // 下陨石，随生成率曲线分布（稀疏段零星、峰值段较密）。陨
     // 石不走四层光轨：实心岩石本体（source-over
     // 压暗成形）+ 前缘熔边 + 身后尘烟与余烬 + 沿途碎裂火花，终
-    // 末在落点闪爆。坠速比火流星更沉更慢（寿命 2.6–3.2 秒对火
-    // 流星 1.9–2.2 秒），本体直径 20–26px 不超原最大档占位。
+    // 末在落点闪爆。坠速比火流星更沉更慢（寿命 2.6–3.2 秒对旧
+    // 火流星放大档 1.9–2.2 秒），本体直径 20–26px 不超原最大
+    // 档占位。2026-11-16 狮子座注入（用户令，见 CURTAIN_VARIANTS
+    // 处注）阶级初版（**已被当晚修订取代、现行口径见本段末**）：
+    // 五路——普通 46% / 明亮 22%（旧放大档转正为独立阶级）/
+    // 火流星 13%（橙红燃烧 + 余迹 + 火花 + 末端闪爆）/ 蓝绿
+    // 16%（蓝绿实色 + 快端寿命 0.85–1.25 秒）/ 最高阶 3%（陨
+    // 石顶替规则一字不动）；同屏存活上限 44→56（峰值稳态需
+    // 求 ≈ 4.2 颗/秒 × 2.3 秒最长寿命 ≈ 9.7，56 为防波次叠
+    // 加的封顶、非稳态）。当晚再修订
+    // （用户三令：火流星不用这么大、特效和形状要和其他的有区
+    // 别、蓝绿色也是 + 比例调低 + 蓝绿不用太快）：火流星 13→
+    // 8%、蓝绿 16→10%，让出份额回普通/明亮（52 / 27），最高
+    // 阶 3% 不动；火流星头光盖印 118→56px、轨宽基数 4.4→2.6，
+    // 形态改不规则火球（见绘制段）；蓝绿寿命 0.85–1.25 秒作
+    // 废、回普通同档（1.3–1.9 秒、表观速度约普通的 1.1 倍），
+    // 形态改针形锐 streak（见绘制段）。
     type CurtainRock = {
       x: number;
       y: number;
@@ -12385,6 +16067,27 @@ export function Globe({
       life: number;
     };
     const curtainBooms: CurtainBoom[] = [];
+    // —— 火流星余迹池（2026-11-16 新增）：火流星（cls=2）沿途
+    // 每约 0.05 秒在身后落一团发光余迹，滞留 2.4–3.8 秒——缓缓
+    // 膨胀、微微上飘、渐隐消散（狮子座火流星的招牌持久尾迹，
+    // 与转瞬即逝的拖尾光轨分工：光轨是「划过」，余迹是「留
+    // 下」）。池封顶 240（峰值火流星约 2–3 颗同场 × 20 团/秒
+    // × 3.1 秒均寿 ≈ 150 团稳态，240 留波次余量）；绘制走加色
+    // 盖印 wakeSprite，压在流星本体之下、星尘场之上。
+    type CurtainWake = {
+      x: number;
+      y: number;
+      vx: number;
+      vy: number;
+      age: number;
+      life: number;
+      /** 初生半径（CSS px），随龄膨胀约 3 倍 */
+      r0: number;
+      ph: number;
+    };
+    const curtainWakes: CurtainWake[] = [];
+    let fireSpawnedTotal = 0;
+    let tealSpawnedTotal = 0;
     let curtainAcc = 0;
     let curtainDrawn = false;
     // —— 星幕质感层：① 轨缀星点池（2026-11-13 09:29 新口径，
@@ -12469,13 +16172,21 @@ export function Globe({
       curtain: () => curtainMeteors.length,
       meteorites: () => curtainRocks.length,
       rocks: () => rockSpawnedTotal,
+      fireballs: () => fireSpawnedTotal,
+      teals: () => tealSpawnedTotal,
+      wakes: () => curtainWakes.length,
+      classes: () => {
+        const c = [0, 0, 0, 0];
+        for (const m of curtainMeteors) c[m.cls]!++;
+        return { normal: c[0], bright: c[1], fireball: c[2], teal: c[3] };
+      },
     };
     /** 调度安全网验收钩子（无 UI、不可见，同 __financeGlobeNight
      * 口径）：build = 建场总时长与最长单片（分片器实测）；frames =
      * 已渲染帧数（离屏暂停期间恒不增——离屏帧数口径 = 暂停起止
      * 两点 frames 之差，恒为 0）；paused / lastGapS = 当前暂停态与
      * 最近一次恢复帧追平的绝对时间缺口；stage / sessionT = 最近
-     * 一帧的彗星舞台钟与会话钟，供恢复帧按公式 (t+30)%320 对照 */
+     * 一帧的彗星舞台钟与会话钟，供恢复帧按公式 (t+30)%400 对照 */
     (window as unknown as Record<string, unknown>).__financeGlobeSched = {
       build: () => ({
         ms: schedStats.buildMs,
@@ -12495,7 +16206,10 @@ export function Globe({
      * 当前归属、拖拽/捏合态）；sunNdc = 太阳世界坐标经当前
      * 相机投影的 NDC（枢轴不变量：邻域在位恒 (0,0)，容差只
      * 剩浮点与相机插值）；gains = 现行增益常数原样（偏航
-     * 0.005 / 俯仰 0.003 rad/px，本轮未动） */
+     * 0.005 rad/px；俯仰 0.003 rad/px 仅银河全览——邻域在
+     * 位时恒 0：2026-11-15 晚纯方位角轮起邻域纵拖不进视
+     * 角、极角冻结于入场极角，gains().tiltPerPx 在邻域读
+     * 0 即代码级断言） */
     (window as unknown as Record<string, unknown>).__financeGlobeGesture =
       {
         drag: () => ({
@@ -12515,11 +16229,19 @@ export function Globe({
           const v = galaxySunWorld.clone().project(camera);
           return { x: v.x, y: v.y, z: v.z };
         },
-        gains: () => ({ yawPerPx: 0.005, tiltPerPx: 0.003 }),
+        gains: () => ({
+          yawPerPx: 0.005,
+          tiltPerPx:
+            stateRef.current.galaxy &&
+            stateRef.current.galaxyView !== "full"
+              ? 0
+              : 0.003,
+        }),
         // 轨道模型断言读数（本轮）：az/pol = 方位角/极角的目
         // 标与当前；roll = 当前组四元数按 YXZ 反解的 z 分量
         // ——合成只写 galOrbitEuler 的 (pol, az, 0)，roll 恒 0
-        // （浮点反解误差内）；横拖只动 az、纵拖只动 pol，可
+        // （浮点反解误差内）；横拖只动 az、纵拖只动 pol（邻
+        // 域内纵拖连 pol 也不动：polT 恒等于入场极角），可
         // 由 azT/polT 的单变量变化直接断言
         orbit: () => {
           const e = new THREE.Euler().setFromQuaternion(
@@ -12547,6 +16269,52 @@ export function Globe({
         // 位向量，y 向下）——最远帧臂长应 = 72（下限主导）、
         // 默认帧应 = 80 pc 投影长（约 183 px @390×785 口径）
         compass: () => ({ ...galCompassState }),
+        // 银河导航改判验收读数（2026-11-15）：当前取景态与邻
+        // 域混合量（回正/退出判定）、「太阳系」签的画布相对
+        // px（探针据此发真实点按走 handleTap 全链）
+        galaxy: () => {
+          let sunLabelPx: { x: number; y: number } | null = null;
+          if (galSunLabel) {
+            const rect = el.getBoundingClientRect();
+            const lv = new THREE.Vector3();
+            galSunLabel.getWorldPosition(lv);
+            lv.project(camera);
+            if (lv.z < 1) {
+              sunLabelPx = {
+                x: ((lv.x + 1) / 2) * rect.width,
+                y: ((1 - lv.y) / 2) * rect.height,
+              };
+            }
+          }
+          // 转场/枢轴诊断（2026-11-15 晚转场轮）：gTrans/
+          // scaleCur/camZ/groupPos/centerNdc 逐帧可读——转
+          // 场结束帧与静态取景的中心偏移（centerNdc 恒
+          // (0,0) ⇔ 银心逐像素钉死）与倍率差（scaleCur 对
+          // 静态值 1.12）由此量，不靠肉眼判
+          const cv = new THREE.Vector3();
+          galaxyGroup.getWorldPosition(cv);
+          const centerWorld = cv.clone();
+          cv.project(camera);
+          return {
+            view: stateRef.current.galaxyView,
+            inGalaxy: stateRef.current.galaxy,
+            nearMix: galaxyNearMix,
+            sunLabelPx,
+            gTrans,
+            scaleCur: galaxyScaleCur,
+            camPos: {
+              x: camera.position.x,
+              y: camera.position.y,
+              z: camera.position.z,
+            },
+            groupPos: {
+              x: centerWorld.x,
+              y: centerWorld.y,
+              z: centerWorld.z,
+            },
+            centerNdc: { x: cv.x, y: cv.y },
+          };
+        },
       };
     /** —— 暂停恢复的瞬时粒子追平（调度安全网）——
      * 星幕瞬时粒子（流星/陨石/烟/烬/碎片/星点/闪光/爆点/闪芒）的
@@ -12573,6 +16341,13 @@ export function Globe({
       ageOut(curtainBooms);
       ageOut(curtainSparks);
       ageOut(curtainSparkles);
+      for (let i = curtainWakes.length - 1; i >= 0; i--) {
+        const wk = curtainWakes[i]!;
+        wk.age += gap;
+        wk.x += wk.vx * gap;
+        wk.y += wk.vy * gap;
+        if (wk.age >= wk.life) curtainWakes.splice(i, 1);
+      }
       for (let i = curtainMeteors.length - 1; i >= 0; i--) {
         const dm = curtainMeteors[i]!;
         dm.age += gap;
@@ -13043,7 +16818,7 @@ export function Globe({
       // 本时钟只服务流星雨，相位口径一字未动（护栏）
       const nightCycleT = (NIGHT_START_PHASE_S + t) % NIGHT_CYCLE_S;
       nightState.cycle = nightCycleT;
-      // 彗星舞台时钟（轮值口径见 COMET_STAGE_S 处注）：四幕轮
+      // 彗星舞台时钟（轮值口径见 COMET_STAGE_S 处注）：五幕轮
       // 值、任一时刻至多一颗彗星在场；stageEnv(u) = 幕内包络
       // （幕外 0、首尾各 8 秒 smoothstep 淡入淡出）
       const stageMt = reducedMotion
@@ -13097,6 +16872,11 @@ export function Globe({
       gTrans += THREE.MathUtils.clamp(gGoal - gTrans, -dt / 2.6, dt / 2.6);
       gTrans = THREE.MathUtils.clamp(gTrans, 0, 1);
       const eG = easeInOutCubic(gTrans);
+      // 莫比乌斯带客串是太阳系全览的故事层：进银河即收起选中
+      // 态（小卡随 (1−eG) 在过渡内淡出，不许残留在银河画面上）
+      if (st.galaxy) {
+        mobiusSelected = false;
+      }
       if (st.galaxy && !galaxyBuilt && !galaxyBuilding) {
         galaxyBuilding = true;
         // 分片构建与帧循环并行推进；卸载中止（BuildAbort）静默
@@ -13110,11 +16890,11 @@ export function Globe({
         // 环视/倾角/邻域档内缩放一并复位：下次进入恒从标准构图起步
         galYawT = 0;
         galYaw = 0;
-        galTiltT = 0.62;
-        galTilt = 0.62;
+        galTiltT = GAL_FULL_TILT;
+        galTilt = GAL_FULL_TILT;
         galaxyNearZoomT = 11;
         galaxyNearZoom = 11;
-        galaxyGroup.rotation.set(0.62, 0, 0);
+        galaxyGroup.rotation.set(GAL_FULL_TILT, 0, 0);
       }
       // 分层时序（都长在同一条 eTrans 上）：
       // 监控图层淡出 0.02→0.45；太阳渐显 0.30→0.85；轨道 i 淡入
@@ -13544,15 +17324,52 @@ export function Globe({
           zodiacFigK = zodiacFigTarget;
         }
         const zodiacFigVis = sunFade * zodiacFigK;
-        if (zodiacFigMat) zodiacFigMat.opacity = 0.9 * zodiacFigVis;
-        // 狮子透明轮廓：与骨架同门控同淡变，峰值压低（填充
-        // 0.065 / 描边 0.30），古星图淡印的读感、恒不抢骨架
-        if (zodiacLeoFillMat)
-          zodiacLeoFillMat.opacity = 0.065 * zodiacFigVis;
-        if (zodiacLeoEdgeMat)
-          zodiacLeoEdgeMat.opacity = 0.3 * zodiacFigVis;
+        // 彗星门控系数（与上同语法、判定镜像）：有效近览在
+        // 位为 1、全览为 0；具名彗星段与行星段的星街彗星同
+        // 乘此值（见各自段注）
+        const cometViewTarget =
+          solarNarrow && st.solarView === "near" ? 1 : 0;
+        cometViewK +=
+          (cometViewTarget - cometViewK) * Math.min(1, dt * 3.2);
+        if (Math.abs(cometViewTarget - cometViewK) < 0.002) {
+          cometViewK = cometViewTarget;
+        }
+        // 绘制版图形在位系数（2026-11-16 水晶模型轮）：模
+        // 型模式且模型未失败时为 0（绘制四层退场、模型在
+        // 场）；drawn 模式或模型加载失败回落时为 1。星点/
+        // 星芒/柔光晕/星尘是数据与氛围层、不乘此系数
+        const figDrawnK =
+          ZODIAC_FIG_MODE === "model" && !zodiacModelFailed ? 0 : 1;
+        // 骨架线 0.38（重构轮主次归位：骨架是结构辅助、
+        // 轮廓缎带与内线是主体；靠分层让位、不靠饿瘦）
+        if (zodiacFigMat)
+          zodiacFigMat.opacity = 0.38 * zodiacFigVis * figDrawnK;
+        // 十二宫轮廓（重构轮四层）：渐变填充 uFade 同步
+        // （着色器内峰值 alpha 心 0.35 / 边 0.05）/ 缎带
+        // 光边 0.88 / 宽光鞘 uFade 同步（鞘心 alpha
+        // 0.65 × 本值）/ 标志内线 0.55
+        for (const m of zodiacOutlineFillMats)
+          m.uniforms.uFade!.value = zodiacFigVis * figDrawnK;
+        for (const m of zodiacOutlineEdgeMats)
+          m.opacity = 0.88 * zodiacFigVis * figDrawnK;
+        for (const m of zodiacOutlineSheathMats)
+          m.uniforms.uFade!.value = zodiacFigVis * figDrawnK;
+        for (const m of zodiacDetailMats)
+          m.opacity = 0.55 * zodiacFigVis * figDrawnK;
+        // 水晶模型淡变：与绘制版同一 zodiacFigVis 口径
+        // （全览在位才在场）；系数近零时整组隐藏省绘制
+        if (zodiacModelGroup) {
+          zodiacModelGroup.visible = zodiacFigVis > 0.01;
+          for (const rec of zodiacModelMats)
+            rec.mat.opacity = rec.base * zodiacFigVis;
+        }
         const zodiacUH = renderer.domElement.height * 1.302;
-        for (const zm of [zodiacNodeMat, zodiacSparkMat]) {
+        for (const zm of [
+          zodiacNodeMat,
+          zodiacSparkMat,
+          zodiacHaloMat,
+          zodiacDustMat,
+        ]) {
           if (!zm) continue;
           zm.uniforms.uFade!.value = zodiacFigVis;
           zm.uniforms.uScaleH!.value = zodiacUH;
@@ -13564,6 +17381,315 @@ export function Globe({
         for (const s of zodiacStarLabels) {
           (s.material as THREE.SpriteMaterial).opacity =
             0.88 * zodiacFigVis;
+        }
+        // —— 莫比乌斯带客串逐帧（构建段有全口径注）：门控与黄
+        // 道图形同款——全览在位（zodiacFigK）才在场，银河过渡
+        // 乘 (1−eG) 同步收起；整体绕太阳轴缓慢自转（周期约
+        // 300 秒）；行走光点相位走会话时钟，标记四元数逐帧由
+        // 局部标架 makeBasis(T, W, N) 导出——走完一圈 W/N 同
+        // 步反号、标记镜像翻转，第二圈复原
+        {
+          const mobTime =
+            mobPhaseOverride !== null
+              ? mobPhaseOverride * MOB_PERIOD_S
+              : reducedMotion
+                ? 0
+                : t;
+          const mobU =
+            MOB_U0 + (Math.PI * 2 * mobTime) / MOB_PERIOD_S;
+          const mobVis = sunFade * zodiacFigK * (1 - eG);
+          mobiusVisNow = mobVis;
+          mobOuter.visible = mobVis > 0.01;
+          if (mobOuter.visible) {
+            mobOuter.rotation.y =
+              mobPhaseOverride !== null || reducedMotion
+                ? 0
+                : t * 0.021;
+            // 高亮点击触发（2026-11-16 元灿令「莫比乌斯环
+            // 的高亮可以改成点击后」，恢复最初「点选提亮、
+            // 关闭还原」机制）：mobSelK 向 mobiusSelected 趋
+            // 近（约 0.35 秒到位/回落），全部提亮系数在常态
+            // 基值（×1.0）与原点选态数值（bright 1.85、带面
+            // ×1.35、星扣辉光 ×1.4、光点辉光 ×1.5）之间按
+            // mobSelK 插值——默认常态、点带（与弹卡同时）提
+            // 亮、关卡回落常态。此前一轮把系数钉死点选态的
+            // 「常驻亮态」作废。流动光是另一回事：它由时钟
+            // 直推常开（见帧段常驻流动光注），不读 mobSelK、
+            // 不随高亮起落；周围光场/星光微粒/光脉冲等特效
+            // 增补亦不读它、照旧
+            mobSelK +=
+              ((mobiusSelected ? 1 : 0) - mobSelK) *
+              Math.min(1, rawDt * 6);
+            if (Math.abs((mobiusSelected ? 1 : 0) - mobSelK) < 0.003)
+              mobSelK = mobiusSelected ? 1 : 0;
+            const bright = 1 + 0.85 * mobSelK;
+            // 带面峰值不透明度 0.50（纠正轮：半透厚度对参
+            // 考，旧 0.16 压暗值作废）×提亮（常态 1.0 / 点
+            // 选 1.35）
+            mobBandMat.uniforms.uBandA!.value =
+              0.5 * mobVis * (1 + 0.35 * mobSelK);
+            mobBandMat.uniforms.uTime!.value = reducedMotion
+              ? 0
+              : t;
+            // 光脉冲相位（特效增密轮）：22 秒一圈沿 ∞ 缓
+            // 行；reduced-motion 时幅度归零、光涌不在场
+            mobBandMat.uniforms.uPulseU!.value =
+              ((mobTime * Math.PI * 2) / 22) % (Math.PI * 2);
+            mobBandMat.uniforms.uPulseA!.value = reducedMotion
+              ? 0
+              : 1;
+            // 整环光场（同轮）：与带同相位流光、透明度随
+            // mobVis；带周星光微粒：逐粒小幅漂移 + 整体
+            // 微呼吸透明度（个体相位在 mobSparkPh）
+            mobHaloMat.uniforms.uTime!.value = reducedMotion
+              ? 0
+              : t;
+            mobHaloMat.uniforms.uA!.value = mobVis;
+            {
+              const sparkT = reducedMotion ? 0 : t;
+              for (let i = 0; i < MOB_SPARK_N; i++) {
+                const ph = mobSparkPh[i]!;
+                mobSparkPos[i * 3] =
+                  mobSparkBase[i * 3]! +
+                  0.05 * Math.sin(sparkT * 0.11 + ph);
+                mobSparkPos[i * 3 + 1] =
+                  mobSparkBase[i * 3 + 1]! +
+                  0.05 * Math.sin(sparkT * 0.09 + ph * 1.7);
+                mobSparkPos[i * 3 + 2] =
+                  mobSparkBase[i * 3 + 2]! +
+                  0.05 * Math.cos(sparkT * 0.1 + ph * 0.6);
+              }
+              mobSparkGeo.attributes.position!.needsUpdate = true;
+              mobSparkMat.opacity =
+                0.55 *
+                mobVis *
+                (reducedMotion
+                  ? 1
+                  : 0.85 + 0.15 * Math.sin(t * 0.7));
+            }
+            mobEdgeMat.opacity = 1 * mobVis * bright;
+            mobEdgeGlowMat.opacity = 0.65 * mobVis * bright;
+            mobEdgeSheathMat.uniforms.uFade!.value =
+              0.55 * mobVis * bright;
+            // 星扣与带尾随带体同拍淡变；带尾绕带面法向轻摆
+            mobClaspStarMat.opacity = 0.95 * mobVis;
+            // 星扣光晕慢呼吸（特效增密轮）：尺度 ±7%、透
+            // 明度 ±8%，周期约 7 秒，与带面流光不同步
+            {
+              const br = reducedMotion
+                ? 1
+                : 1 + 0.07 * Math.sin(t * 0.9);
+              mobClaspGlow.scale.set(0.85 * br, 0.85 * br, 1);
+              mobClaspGlowMat.opacity =
+                0.5 *
+                mobVis *
+                (1 + 0.4 * mobSelK) *
+                (reducedMotion
+                  ? 1
+                  : 0.92 + 0.08 * Math.sin(t * 0.9 + 0.6));
+            }
+            for (const m of mobTailMats) {
+              m.opacity = 0.55 * mobVis * bright;
+            }
+            mobTails.rotation.y = reducedMotion
+              ? 0
+              : 0.07 * Math.sin(t * 0.8);
+            // 标架：相位拆「圈内相位 + 已完成圈数」——ψ 逐圈
+            // 再累积 π，W/N 每圈反号、两圈复原（mobFrameAt）
+            const mobCircuits = Math.floor(mobU / (Math.PI * 2));
+            mobFrameAt(mobWrapU(mobU), mobCircuits, mobFrame);
+            mobC.copy(mobFrame.c);
+            mobTan.copy(mobFrame.t);
+            mobWv.copy(mobFrame.w);
+            mobNv.copy(mobFrame.n);
+            mobBasisM.makeBasis(mobTan, mobWv, mobNv);
+            mobWalker.quaternion.setFromRotationMatrix(mobBasisM);
+            mobWalker.position.copy(mobC);
+            mobFinMat.opacity = mobVis;
+            mobCoreMat.opacity = mobVis;
+            mobBallMat.opacity = mobVis;
+            mobGlowMat.opacity = 0.8 * mobVis * (1 + 0.5 * mobSelK);
+            // 行走光点长尾（特效增密轮）：相位每推进 0.02
+            // rad 采一个历史点（与帧率无关），缎带自光点
+            // 处（宽 0.085）向尾端收细渐隐、跨度约 0.52
+            // rad；历史不足时以当前点垫满（尾与头重合、无
+            // 形）。采样在 mobTilt 本地系（mobC/mobWv 本
+            // 就是本地量），缎带同挂 mobTilt、天然同位
+            {
+              if (
+                mobTrailLastU === null ||
+                Math.abs(mobU - mobTrailLastU) >= 0.02
+              ) {
+                mobTrailLastU = mobU;
+                mobTrailHist.unshift({
+                  p: mobC.clone(),
+                  w: mobWv.clone(),
+                });
+                if (mobTrailHist.length > MOB_TRAIL_N) {
+                  mobTrailHist.pop();
+                }
+              }
+              const head = mobTrailHist[0];
+              for (let i = 0; i < MOB_TRAIL_N; i++) {
+                const h = mobTrailHist[i] ?? head;
+                if (!h) break;
+                const hw =
+                  0.085 * (1 - i / (MOB_TRAIL_N - 1)) + 0.004;
+                mobTrailPos[i * 6] = h.p.x + h.w.x * hw;
+                mobTrailPos[i * 6 + 1] = h.p.y + h.w.y * hw;
+                mobTrailPos[i * 6 + 2] = h.p.z + h.w.z * hw;
+                mobTrailPos[i * 6 + 3] = h.p.x - h.w.x * hw;
+                mobTrailPos[i * 6 + 4] = h.p.y - h.w.y * hw;
+                mobTrailPos[i * 6 + 5] = h.p.z - h.w.z * hw;
+              }
+              mobTrailGeo.attributes.position!.needsUpdate = true;
+              mobTrailMat.uniforms.uA!.value = mobVis;
+            }
+            mobState.uDeg =
+              (((mobU * 180) / Math.PI) % 360 + 360) % 360;
+            mobState.loops =
+              mobTime / MOB_PERIOD_S + MOB_U0 / (Math.PI * 2);
+            mobState.pos[0] = mobC.x;
+            mobState.pos[1] = mobC.y;
+            mobState.pos[2] = mobC.z;
+            // —— 昔涟定调动效逐帧 ——
+            // 光尘漂移：90 粒沿带面缓行（相位各自匀速推进）
+            for (let i = 0; i < MOB_DUST_N; i++) {
+              mobDustU[i] = mobDustU[i]! + mobDustSp[i]! * dt;
+              mobPoint(mobDustU[i]!, mobDustV[i]!, mobTmpV);
+              mobDustPos[i * 3] = mobTmpV.x;
+              mobDustPos[i * 3 + 1] = mobTmpV.y;
+              mobDustPos[i * 3 + 2] = mobTmpV.z;
+            }
+            mobDustGeo.attributes.position!.needsUpdate = true;
+            mobDustMat.opacity = 0.7 * mobVis;
+            // 粉紫花瓣漂移：6 片收在星扣邻域内小幅摆动（相
+            // 位 MOB_U1 ± 0.55），轻摆自旋 + 浮沉，缓速少量
+            for (const pt of mobPetals) {
+              const petalT = reducedMotion ? 0 : t;
+              const uu =
+                pt.baseU +
+                pt.oscAmp *
+                  Math.sin(petalT * pt.oscSpd + pt.bobPh);
+              mobPoint(uu, pt.v, mobTmpV);
+              pt.sprite.position.copy(mobTmpV);
+              pt.sprite.position.y +=
+                0.05 * Math.sin(petalT * 0.6 + pt.bobPh);
+              pt.mat.rotation = pt.bobPh + petalT * pt.spin;
+              pt.mat.opacity = 0.5 * mobVis;
+            }
+            // 光点涟漪：会话时钟下每约 0.85 秒在光点当前位置
+            // 放一枚，躺标架 T-W 平面扩散，半径至带宽量级衰减
+            if (
+              !reducedMotion &&
+              mobPhaseOverride === null &&
+              mobVis > 0.5
+            ) {
+              mobRippleTimer += dt;
+              if (mobRippleTimer > 0.85) {
+                mobRippleTimer = 0;
+                const rp = mobRipples[mobRippleIdx]!;
+                mobRippleIdx =
+                  (mobRippleIdx + 1) % MOB_RIPPLE_N;
+                rp.active = true;
+                rp.age = 0;
+                rp.line.visible = true;
+                rp.line.position.copy(mobC);
+                rp.line.quaternion.setFromRotationMatrix(
+                  mobBasisM,
+                );
+              }
+            }
+            let ripActive = 0;
+            for (const rp of mobRipples) {
+              if (!rp.active) continue;
+              rp.age += dt;
+              if (rp.age >= MOB_RIPPLE_LIFE) {
+                rp.active = false;
+                rp.line.visible = false;
+                rp.mat.opacity = 0;
+                continue;
+              }
+              ripActive++;
+              const k = rp.age / MOB_RIPPLE_LIFE;
+              // 扩散半径随新带宽走（带面半宽 0.20、涟漪漫到
+              // 带缘外一线衰减，纠正轮同步）
+              const rad = 0.035 + (1 - (1 - k) * (1 - k)) * 0.3;
+              rp.line.scale.set(rad, rad, rad);
+              rp.mat.opacity = 0.5 * (1 - k) * mobVis;
+            }
+            mobState.ripplesActive = ripActive;
+            // 翻面迸散：光点相位跨过星扣（u = MOB_U1 + 2πk、
+            // ψ 窗口中心、标架在此翻转的那一瞬，此时光点恰在
+            // 星扣处）触发一簇水晶碎片——迸散收在扣处爆发，
+            // 只是视觉标点，翻面判定仍靠标记镜像
+            const claspIdx = Math.floor(
+              (mobU - MOB_U1) / (Math.PI * 2),
+            );
+            if (
+              mobPrevLoopFloor !== null &&
+              claspIdx > mobPrevLoopFloor &&
+              mobVis > 0.3
+            ) {
+              mobSpawnBurst(mobC, mobTan, mobWv, mobNv);
+            }
+            mobPrevLoopFloor = claspIdx;
+            if (mobBurstAge < MOB_BURST_LIFE) {
+              mobBurstAge += dt;
+              const bk = Math.max(
+                0,
+                1 - mobBurstAge / MOB_BURST_LIFE,
+              );
+              const damp = Math.max(0, 1 - 0.9 * dt);
+              for (const sh of mobShards) {
+                sh.mesh.position.addScaledVector(sh.vel, dt);
+                sh.vel.multiplyScalar(damp);
+                sh.mesh.rotation.x += sh.spin.x * dt;
+                sh.mesh.rotation.y += sh.spin.y * dt;
+                sh.mesh.rotation.z += sh.spin.z * dt;
+              }
+              for (const m of mobShardMats) {
+                m.opacity = 0.95 * bk * mobVis;
+              }
+              // 白色星爆：前 0.35 秒胀开并淡去，比碎片收得快
+              const sk = Math.max(0, 1 - mobBurstAge / 0.35);
+              const ss = 0.12 + (1 - sk) * 0.42;
+              mobStar.scale.set(ss, ss, 1);
+              mobStarMat.opacity = 0.9 * sk * mobVis;
+              if (mobBurstAge >= MOB_BURST_LIFE) {
+                for (const sh of mobShards) {
+                  sh.mesh.visible = false;
+                }
+                mobStar.visible = false;
+              }
+            }
+            mobState.burstCount = mobBurstCount;
+            // 常驻流动光（更正轮）：相位由会话时钟 mobTime 直
+            // 推——2.8 秒一圈（旧点选涟漪波前速度 π/1.4s 的同
+            // 值），未点选就在流、点选不触发也不打断、关卡后
+            // 照旧；mobTime 已含相位覆盖/reduced-motion 冻结
+            // 口径（冻结时光停在原相位、不流动）。waveT 钩子
+            // 读数改报流动相位（0..1 圈内进度）
+            const mobFlowU =
+              ((mobTime * Math.PI * 2) / 2.8) % (Math.PI * 2);
+            mobWaveMat.uniforms.uFlowU!.value = mobFlowU;
+            mobWaveMat.uniforms.uWaveA!.value = mobVis;
+            mobState.waveT = mobFlowU / (Math.PI * 2);
+          }
+          mobState.vis = mobVis;
+          mobState.selected = mobiusSelected;
+          // 小卡淡变（选中且带体在位才出；收起走同一平滑口径）
+          const mobCardTarget =
+            mobiusSelected && mobVis > 0.3 ? 1 : 0;
+          mobCardK +=
+            (mobCardTarget - mobCardK) * Math.min(1, dt * 5);
+          if (Math.abs(mobCardTarget - mobCardK) < 0.002) {
+            mobCardK = mobCardTarget;
+          }
+          mobCard.style.opacity = String(mobCardK * 0.98);
+          mobCard.style.visibility =
+            mobCardK > 0.02 ? "visible" : "hidden";
+          mobCard.style.transform = `translateY(${((1 - mobCardK) * 6).toFixed(1)}px)`;
         }
         if (moonOrbitMat) moonOrbitMat.opacity = 0.34 * orbitFade(2);
         // 标签避让平滑推进：避让 pass 只写目标（labelFadeT/labelDyT，
@@ -13598,31 +17724,57 @@ export function Globe({
             pz = suiseiPosTmp.z;
           }
           const pf = orbitFade(i);
+          // 星街彗星全览门控（2026-11-15 晚，用户：「星街彗
+          // 星也隐藏」）：与具名彗星同乘 cometViewK——有效全
+          // 览时星体/专属光效/名签整层收起（本体材质不透明、
+          // 无淡化通道：系数趋零时 visible 关 + 缩放趋零，
+          // 命中圈随本体缩放同缩、全览点不到隐形星体；光效
+          // 与名签走各自透明度平滑淡出，不闪不跳）；聚焦星
+          // 街彗星本身时恒在场（点选聚焦行为不动），近览照
+          // 旧。其轨道圈与行星环同列、不在隐藏之列
+          const suiseiK =
+            pv.def.id === "suisei"
+              ? st.focusedBody === "suisei"
+                ? 1
+                : cometViewK
+              : 1;
           if (pv.mesh) {
             pv.mesh.position.set(px, py, pz);
             pv.mesh.rotation.y =
               pv.def.id === "suisei"
                 ? t * 0.085 // 偏快自转（旧客串口径不变）
                 : t * 0.05 * (i % 2 === 0 ? 1 : -0.7);
-            pv.mesh.scale.setScalar(0.55 + 0.45 * pf);
+            pv.mesh.scale.setScalar(
+              (0.55 + 0.45 * pf) *
+                (pv.def.id === "suisei" ? Math.max(suiseiK, 0.0001) : 1),
+            );
+            if (pv.def.id === "suisei") {
+              pv.mesh.visible = suiseiK > 0.02;
+            }
           }
           if (pv.label) {
             pv.label.position.set(px, py + pv.labelY + pv.labelDy, pz);
             (pv.label.material as THREE.SpriteMaterial).opacity =
-              pf * pv.labelFade;
+              pf * pv.labelFade * suiseiK;
           }
           // 个性效应与本体同拍：fade = 该行星的 orbitFade，转场
-          // 期间随本体一起淡入淡出，不留残留闪烁
-          pv.fxTick?.(t, pf);
+          // 期间随本体一起淡入淡出，不留残留闪烁（星街彗星再
+          // 乘门控系数 suiseiK）
+          pv.fxTick?.(t, pf * suiseiK);
         }
         sunMesh.rotation.y = t * 0.008;
-        // —— 具名彗星逐帧（哈雷/恩克/潘斯达斯/艾森）：登场走舞
-        // 台轮值第 0–3 幕、哈雷起场（口径见 COMET_STAGE_S 处
+        // —— 具名彗星逐帧（哈雷/恩克/潘斯达斯/艾森/坦普尔–塔
+        // 特尔）：登场走舞
+        // 台轮值第 0–4 幕、哈雷起场（口径见 COMET_STAGE_S 处
         // 注）——各颗只在自己那一幕里在场：幕内时间以其近日点
         // 为幕中点、按 slotScale 缩放映射到其轨道时间，淡化 =
-        // sunFade × 幕包络，非本幕恒 0（整组隐去、名卡随
+        // sunFade × 幕包络 × cometViewK（2026-11-15 晚全览隐
+        // 藏轮：有效全览时 cometViewK=0——核/双尾/粒子/名卡/
+        // 本颗轨道线整层不渲染，全览只剩环＋莫比乌斯＋行星
+        // 盘的干净构图；近览照旧，舞台钟不受门控、切换不重
+        // 置），非本幕恒 0（整组隐去、名卡随
         // fadeNow 同步隐去）；reduced-motion 时舞台冻结在哈雷
-        // 幕、余三颗不在场。状态由真实根数的 namedCometStateAt
+        // 幕、余四颗不在场。状态由真实根数的 namedCometStateAt
         // 逐帧算；双尾脊线几何规则全颗同构（离子直指背阳、尘
         // 埃沿自身历史轨迹 + 背阳漂移），质感/色彩/粒子/体量
         // 逐颗分家（见 def 表）；近日点粒子喷流段末 prox 驱
@@ -13637,7 +17789,7 @@ export function Globe({
           const cs = namedCometStateAt(def, localT, SOLAR_S);
           nc.localPos.copy(cs.pos);
           nc.act = cs.activity;
-          const ncFade = sunFade * stageEnv(u);
+          const ncFade = sunFade * stageEnv(u) * cometViewK;
           nc.fadeNow = ncFade;
           // 轨道线同属本颗的「出现」单位、随幕包络同进同出（非
           // 本幕不留线）；在场时略提亮（0.34 vs 旧全程 0.2）补
@@ -13732,11 +17884,12 @@ export function Globe({
               }
             }
             // 近日点冰晶喷流逐帧：近日因子 prox 自 1.35 AU 起线
-            // 性升腾、近日点（r = q）达 1，^1.35 收边。四颗的正
-            // 切弯折时间轴把过境展开——prox>0.02 的窗口实测占
-            // 各自幕的 53–66 秒（幕长 80 秒），每颗过近日点都
+            // 性升腾、近日点（r = q）达 1，^1.35 收边。五颗的正
+            // 切弯折时间轴把过境展开——prox>0.02 的窗口公式复算
+            // 占各自幕的约 39–66 秒（幕长 80 秒；坦普尔 q≈0.98
+            // 离 1.35 AU 阈值近、窗口最短约 39 秒），每颗过近日点都
             // 有一场粒子喷发，不再是旧客串喷流那种开场 30 秒
-            // 错过即无的窗口。呼吸相位按 cardPrio 错开，四颗
+            // 错过即无的窗口。呼吸相位按 cardPrio 错开，五颗
             // 不同步（虽轮值独占、仍守确定性口径）
             const qNc = def.a * (1 - def.e);
             const prox = Math.pow(
@@ -13824,6 +17977,122 @@ export function Globe({
           solarGroup.updateMatrixWorld(true);
           earthAnchor.getWorldPosition(tmpWorldV);
           earth.position.lerpVectors(ZERO_V, tmpWorldV, eTrans);
+        }
+        // —— 地心视线桥逐帧（构建段有全口径注）：只在点选状态在
+        // 位；地球与目标天体都在动，逐帧按本帧场景位置重算。
+        // 实线段 地球→目标（看的视线）；落点恒按地心链黄经落在
+        // 环上（环点公式与行星落位同式：黄经 λ → 组内 (cosλ·R,
+        // 0, −sinλ·R)，链黄经与场景黄经同为岁差对齐口径、同
+        // 框可比）；虚线段 目标→落点（读数的投影延长）。太阳同
+        // 理（地球→太阳即反地球方向）；月亮绕地球转、日心落宫
+        // 对它没有占星意义，只给地心读数，视线照画（地球→月亮
+        // 的场景方向即地心方向，折角只剩月轨倾角量级）。点选
+        // 地球本身（补洞）：目标取太阳、读数取太阳地心黄经——
+        // 视线即地球→太阳这一条，落点与标签同为太阳的落宫。
+        {
+          const fidS = st.focusedBody;
+          const sightId = fidS && fidS !== "suisei" ? fidS : null;
+          sightK +=
+            ((sightId ? 1 : 0) - sightK) * Math.min(1, dt * 3.2);
+          if (Math.abs((sightId ? 1 : 0) - sightK) < 0.002) {
+            sightK = sightId ? 1 : 0;
+          }
+          const sightVis = sunFade * sightK;
+          sightGroup.visible = sightVis > 0.01;
+          sightState.id = sightId;
+          sightState.k = sightK;
+          if (sightGroup.visible && sightId && earthAnchor) {
+            sightE.copy(earthAnchor.position);
+            let haveT = true;
+            if (sightId === "sun" || sightId === "earth") {
+              // 点选地球：视线目标 = 太阳（组原点）——地球→太阳
+              sightT.set(0, 0, 0);
+            } else if (sightId === "moon" && moonMesh && moonGroup) {
+              sightT
+                .copy(moonMesh.position)
+                .applyEuler(moonGroup.rotation)
+                .add(moonGroup.position);
+            } else {
+              const pv = planetVis.find((p) => p.def.id === sightId);
+              if (pv?.mesh) sightT.copy(pv.mesh.position);
+              else haveT = false;
+            }
+            // 读数：地心链（与世事占星卡同源同函数）；点选地球
+            // 时读数 = 太阳地心黄经（从地球看太阳的落宫）
+            let geoLon: number | null = null;
+            if (sightId === "sun" || sightId === "earth") {
+              geoLon = sunGeocentricEcliptic(solarNow).lonDeg;
+            } else if (sightId === "moon") {
+              geoLon = moonEcliptic(solarNow).lonDeg;
+            } else {
+              const adef = ASTRO_PLANETS.find((p) => p.id === sightId);
+              if (adef) {
+                geoLon = planetGeocentricEcliptic(adef, solarNow).lonDeg;
+              }
+            }
+            if (haveT && geoLon !== null) {
+              const gRad = (geoLon * Math.PI) / 180;
+              sightL.set(
+                Math.cos(gRad) * SIGHT_RING_R,
+                0,
+                -Math.sin(gRad) * SIGHT_RING_R,
+              );
+              const posAttr = sightLineGeo.getAttribute(
+                "position",
+              ) as THREE.BufferAttribute;
+              posAttr.setXYZ(0, sightE.x, sightE.y, sightE.z);
+              posAttr.setXYZ(1, sightT.x, sightT.y, sightT.z);
+              posAttr.needsUpdate = true;
+              const extAttr = sightExtGeo.getAttribute(
+                "position",
+              ) as THREE.BufferAttribute;
+              extAttr.setXYZ(0, sightT.x, sightT.y, sightT.z);
+              extAttr.setXYZ(1, sightL.x, sightL.y, sightL.z);
+              extAttr.needsUpdate = true;
+              sightExtLine.computeLineDistances();
+              sightDot.position.copy(sightL);
+              sightHalo.position.copy(sightL);
+              // 标签落到落点内侧（宫签所在的一侧）；字号按既有
+              // 标签同一钳制口径（到镜头距离/currentSolarZ）收
+              // 分——聚焦飞近不许巨字、拉远也不许缩没
+              const inward = (SIGHT_RING_R - 0.66) / SIGHT_RING_R;
+              sightLabel.position.set(
+                sightL.x * inward,
+                sightL.y + 0.05,
+                sightL.z * inward,
+              );
+              sightLabel.getWorldPosition(tmpWorldV);
+              const ratioS = THREE.MathUtils.clamp(
+                tmpWorldV.distanceTo(camera.position) /
+                  Math.max(currentSolarZ, 0.001),
+                0.16,
+                2.4,
+              );
+              sightLabel.scale.set(0.98 * ratioS, 0.245 * ratioS, 1);
+              sightHalo.scale.setScalar(0.34 * ratioS);
+              const labelText = `地心 ${zodiacSignFor(geoLon)} ${(geoLon % 30).toFixed(1)}°`;
+              drawSightLabel(labelText);
+              const sceneGeoDeg =
+                ((Math.atan2(
+                  -(sightT.z - sightE.z),
+                  sightT.x - sightE.x,
+                ) *
+                  180) /
+                  Math.PI +
+                  360) %
+                360;
+              sightState.sceneGeoDeg = sceneGeoDeg;
+              sightState.chainGeoDeg = geoLon;
+              sightState.bendDeg =
+                ((geoLon - sceneGeoDeg + 540) % 360) - 180;
+              sightState.label = labelText;
+            }
+            sightLineMat.opacity = 0.55 * sightVis;
+            sightExtMat.opacity = 0.5 * sightVis;
+            sightDotMat.opacity = 0.95 * sightVis;
+            sightHaloMat.opacity = 0.5 * sightVis;
+            sightLabelMat.opacity = 0.95 * sightVis;
+          }
         }
         // —— 太阳系标签：字号钳制 + 碰撞避让（录屏实证修复）——
         // 巨字病根：标签是固定世界尺寸的精灵，聚焦飞近时镜头距离
@@ -14458,31 +18727,35 @@ export function Globe({
           // 只写目标、由下方阻尼平滑落位，用户入场后拖动改的
           // 还是同一目标，不强行复位
           if (nearGoal === 1 && galPrevNearGoal === 0) {
-            // 入场极角（本轮追加：银心在上方）：按当次自转相
-            // 位选 ±0.62 并写极角目标——方位与极角同帧落定，
-            // 落定帧银心方向恒在太阳上方（见 galEntryPol）；
-            // 轨道模型以此为初始方位/极角（拖动模型条）
-            const entryPol = galEntryPol(galaxySpin.rotation.y);
+            // 入场朝向（旋转轴对齐轮）：极角恒 +0.62（galEntry
+            // Pol 定版，不再按相位翻符号）；「银心在太阳上
+            // 方」改由方位角选取——galEntryPhase 选入场自转
+            // 相位分支，帧段自转驱动把盘面阻尼拨到该相位，
+            // 偏航/签求解一律按拨正后相位解算（落定几何即求
+            // 解几何）；轨道模型以此为初始方位/极角（拖动模
+            // 型条）
+            const entrySpin = galEntryPhase(galaxySpin.rotation.y);
+            galSpinEntryTarget = entrySpin;
+            const entryPol = galEntryPol(entrySpin);
             galTiltT = entryPol;
-            const targetYaw = galEntryYaw(
-              galaxySpin.rotation.y,
-              entryPol,
-            );
+            const targetYaw = galEntryYaw(entrySpin, entryPol);
             let dYaw = (targetYaw - galYaw) % (Math.PI * 2);
             if (dYaw > Math.PI) dYaw -= Math.PI * 2;
             if (dYaw < -Math.PI) dYaw += Math.PI * 2;
             galYawT = galYaw + dYaw;
-            // 星名签偏移按当次入场相位重算（构建预置的是相
+            // 星名签偏移按拨正后相位重算（构建预置的是相
             // 位 0 的版本；相位变了相对几何就滚了，签的优选
             // 方向必须跟着当次几何走）——锚定与呼出两套同帧
             // 换，求解/写回走 applyGalLabelSolve（落定再求解
             // 与入场共用同一口径）
-            applyGalLabelSolve(galaxySpin.rotation.y);
+            applyGalLabelSolve(entrySpin);
           }
-          // 退出边沿：极角目标复位全览口径 +0.62（入场负极角
-          // 只活在邻域内，全览盘面倾角恒为既有正值）
+          // 退出边沿：极角目标复位全览落定倾角 GAL_FULL_TILT
+          // （全览盘面倾角恒为落定正值，邻域极角同为 +0.62，
+          // 两态同号不镜像）；未完成的相位拨正一并取消
           if (nearGoal === 0 && galPrevNearGoal === 1) {
-            galTiltT = 0.62;
+            galTiltT = GAL_FULL_TILT;
+            galSpinEntryTarget = null;
           }
           galPrevNearGoal = nearGoal;
           // 环视/倾角/档内缩放的阻尼趋近（拖拽与手势只写目标，
@@ -14513,9 +18786,10 @@ export function Globe({
           // 接等于目标，场景钉在指尖（稳态滞后 5.4°→0）；趋
           // 近只保留给入场摆入、稳态与松手后的惯性滑行。直
           // 连以重锚完成为前提（galDragRebasePending 已消费：
-          // 目标已搬到当前实际角，赋值不跳帧）；俯仰先顶到
-          // 夹取边界时目标停在界上、偏航照常逐帧直连——两
-          // 轴自 onMove 起即解耦写入，直连不改变这一点
+          // 偏航目标已搬到当前实际角，赋值不跳帧）；极角自
+          // 纯方位角轮起在邻域恒为入场极角目标——直连赋值
+          // galTilt = galTiltT 只是把入场落定提前钉死，拖动
+          // 本身从不改这个值
           const galDirectDrag =
             nearGoal === 1 &&
             dragging &&
@@ -14590,10 +18864,37 @@ export function Globe({
             el.style.touchAction = wantTouchNone ? "none" : "pan-y";
             mount.style.touchAction = wantTouchNone ? "none" : "pan-y";
           }
-          // 自转：2π/26 分钟的庄重慢转；近览冻结（邻域不许漂移）、
-          // reduced-motion 冻结
+          // 自转：整盘绕银心缓转——原 2π/26 分钟（0.00403
+          // rad/s）在真机上与静止无异，2026-11-16 活银河返工
+          // 轮按用户授权带（8–12 分钟一圈）提速到 2π/600 秒
+          // （0.01047 rad/s、10 分钟一圈）：全览尺度下亮盘缘
+          // （约 5.5 wu）5 秒弧移约 0.26 wu ≈ 13–15 px、内盘
+          // 2 wu 处约 5 px——整体活气靠它打底，逐粒子游移叠
+          // 在其上（与枢轴定版同轴：galaxySpin 原点即银心、
+          // 全览组位移恒 0，银心仍钉画面中心）；近览冻结
+          // （邻域不许漂移）、reduced-motion 冻结。入场相位
+          // 拨正在位时（旋转轴对齐轮）先把自转角按最短角距
+          // 阻尼拨到目标相位（转场飞行内完成、落定清零）——
+          // 拨正本身是入场摆入的一部分，与偏航/极角阻尼同
+          // 族，不受 reduced-motion 冻结（冻结的是常速慢转
+          // 与游移时钟）
+          if (galSpinEntryTarget !== null) {
+            let dSpin =
+              (galSpinEntryTarget - galaxySpin.rotation.y) %
+              (Math.PI * 2);
+            if (dSpin > Math.PI) dSpin -= Math.PI * 2;
+            if (dSpin < -Math.PI) dSpin += Math.PI * 2;
+            galaxySpin.rotation.y +=
+              dSpin * Math.min(1, dt * 2.6);
+            if (Math.abs(dSpin) < 0.002) galSpinEntryTarget = null;
+          } else if (!reducedMotion) {
+            galaxySpin.rotation.y += dt * 0.01047 * (1 - eNC);
+          }
+          // 粒子游移时钟（同轮）：全览在位时推进、邻域按
+          // (1−eNC) 渐冻（校准层恒静）、reduced-motion 冻结
           if (!reducedMotion) {
-            galaxySpin.rotation.y += dt * 0.00403 * (1 - eNC);
+            galOrbitClock += dt * (1 - eNC);
+            galOrbitUniform.value = galOrbitClock;
           }
           const galaxyTargetZ = galaxyFitZ / galaxyZoom;
           smoothGalaxyZ +=
@@ -14629,9 +18930,17 @@ export function Globe({
           // 纠正）
           const scaleGoal =
             (0.15 + 0.85 * eG) *
-            (1 + (nearK * galaxyNearZoom - 1) * eNear);
+            (1 + (nearK * galaxyNearZoom - 1) * eNear) *
+            (1 + GAL_FULL_BOOST * (1 - eNear));
           galaxyScaleCur +=
             (scaleGoal - galaxyScaleCur) * Math.min(1, dt * 3.5);
+          // 落定吸附（转场轮）：阻尼尾段的残差（实测量级
+          // <1%）在转场结束后还会续收数帧、全盘像轻微呼吸
+          // ——差 <0.002 时直接落定，转场结束帧与静态取景
+          // 严丝合缝、无回弹（口径同 smoothSolarZ 的吸附）
+          if (Math.abs(scaleGoal - galaxyScaleCur) < 0.002) {
+            galaxyScaleCur = scaleGoal;
+          }
           // 邻域捏合直连（取证轮）：邻域已落定（eNC≈1）且捏
           // 合在行时组缩放直达目标——指距变化当帧见效；入场
           // 混合未落定时 scaleGoal 还在随 eNear 演化，仍走上
@@ -14679,7 +18988,21 @@ export function Globe({
           // 场逆行：settle 先复钉、太阳回到原点后太阳系才长
           // 出来交接。全程同一枚太阳标记、无跳切
           const settleK = sstep((eG - 0.78) / 0.22);
-          const pinK = Math.max(eNC, 1 - settleK);
+          // 转场锚点分向（2026-11-15 晚转场轮，元灿：「缩
+          // 放转场位置还是不太对」+ 枢轴轮同令）：进入方向
+          // （st.galaxy 为真）锚点 = 银心——pinK 只剩邻域分
+          // 量 eNC，全览与进入转场全程 galaxyPosTarget 恒
+          // 为 0、银心逐帧代数钉死画面中心，缩放只绕银心
+          // 展开；退出方向锚点 = 太阳——保留 settle 语义
+          // （eG 跌出收尾段后钉力渐回、太阳缓归中心与太阳
+          // 系静态取景衔接）。两式在切换帧取值一致（eG=1
+          // 时同为 eNC；eG=0 时银河不可见），方向翻转无跳
+          // 变。旧进入式（1−settleK 钉太阳至 0.78 再滑向银
+          // 心）的问题正是锚点在转场尾段横移——落点看着
+          // 「漂过去再停」，本轮废除
+          const pinK = st.galaxy
+            ? eNC
+            : Math.max(eNC, 1 - settleK);
           galaxyPosTarget.copy(galaxyTmpV).multiplyScalar(-pinK);
           // 枢轴精确解算（真机修正轮，用户真机判「旋转中心不
           // 是太阳系」）：旧实现对平移再套一层 dt*3.5 的 lerp
@@ -14692,21 +19015,20 @@ export function Globe({
           // 平滑——输入本身（galYaw/galTilt/galaxyScaleCur/
           // eG/eNC）都是平滑量，解出的轨迹同样连续无跳
           galaxyPosCur.copy(galaxyPosTarget);
-          // 全览取景中心最小偏移（真机修正轮二 E，移动端）：
-          // 亮盘按 0.80 画布高定标后（fitZ≈17.9），太阳真位
-          // （8.15 kpc、盘面横偏最大 4.075 世界单位）在自转侧
-          // 位相位下 NDC 横偏可达约 1.03、标记出框——把落位后
-          // 的取景中心沿太阳偏移方向挪 frameK=0.22 的一份：
-          // 太阳横偏压到约 0.81（标记+签在框内），黑洞随之偏
-          // 出正中心约 ≤0.23 NDC（仍在中央区，用户口径「黑
-          // 洞仍在中央区」）。只在落位后的全览生效（settleK
-          // 满格、邻域未在位），转场主体段与邻域恒零；桌面宽
-          // 画幅太阳天然在框内，不偏移
-          const frameK =
-            settleK * (1 - eNC) * (isCoarse ? 0.22 : 0);
-          if (frameK > 0.0001) {
-            galaxyPosCur.addScaledVector(galaxyTmpV, -frameK);
-          }
+          // 【frameK 取景偏移已废除（2026-11-15 晚枢轴轮，
+          // 元灿真机判「旋转的时候并不是按银心为中心旋
+          // 转」）】旧制（真机修正轮二 E）：全览落位后把取
+          // 景中心沿太阳当前偏移方向挪 0.22 份（移动端），
+          // 保太阳标记不出框——代价是组原点（银心）被拖着
+          // 随自转/拖动的相位绕行：galaxyTmpV 随 spin 旋转，
+          // 偏移方向逐帧跟着转，银心在画面上画圈、盘面像绕
+          // 偏心点摆（NDC 摆幅约 ±0.22×4.075/6.87 ≈ ±0.13、
+          // 390px 宽约 ±26px）。本轮整条删除：全览（含转
+          // 场）组位移逐帧代数恒为 galaxyPosTarget（进入/
+          // 全览 = 0），银心恒在画面正中、旋转只绕它。太阳
+          // 标记在窄屏侧位相位下可出框，是枢轴精确的代价
+          // （邻域才是太阳的校准层，全览为银心枢轴让位；
+          // 口径见 DATA-PLAN 本轮条目）
           galaxyGroup.position.copy(galaxyPosCur);
           galaxySunWorld.copy(galaxyPosCur).add(galaxyTmpV);
           // 镜头接管（聚焦相机在银河模式下不该在位——App 只从太
@@ -14735,6 +19057,14 @@ export function Globe({
           }
           for (const rec of galHubMats) {
             rec.mat.opacity = rec.base * galFade * (1 - eNC);
+          }
+          // 连续光场层（辉光底片/尘带暗幕）：全览读法专属，
+          // 随邻域混合 (1−eNC) 退场——写 uOpacity 同 galFadeMats
+          for (const rec of galHazeMats) {
+            const sm = rec.mat as THREE.ShaderMaterial;
+            if (sm.uniforms && sm.uniforms.uOpacity)
+              sm.uniforms.uOpacity.value = rec.base * galFade * (1 - eNC);
+            else rec.mat.opacity = rec.base * galFade * (1 - eNC);
           }
           // 邻域定位家具（网格/垂线/距离环/引力井）：只在邻
           // 域档随 eNC 淡入，全览恒隐
@@ -14974,7 +19304,14 @@ export function Globe({
             const showC = eNC > 0.02;
             cp.line.visible = showC;
             cp.marker.visible = showC;
+            cp.pulse.visible = showC;
             cp.label.visible = showC;
+            if (!showC) {
+              galCompassState.mkPxX = -1;
+              galCompassState.mkPxY = -1;
+              galCompassState.lbPxX = -1;
+              galCompassState.lbPxY = -1;
+            }
             if (showC) {
               const cwC = mount.clientWidth || 390;
               const chC = mount.clientHeight || 785;
@@ -15080,6 +19417,19 @@ export function Globe({
                 cp.marker.position.copy(galWarpV);
                 cp.marker.scale.set(36 * wpp, 36 * wpp, 1);
                 cp.markerMat.opacity = galFade * eNC;
+                // 热区落位登记（点按判定与验收钩子共用本帧真值）
+                galCompassState.mkPxX = mkPxX;
+                galCompassState.mkPxY = mkPxY;
+                galCompassState.lbPxX = lbPxX;
+                galCompassState.lbPxY = lbPxY;
+                // 呼吸环（可点暗示，见构建处）：与标记同心，尺
+                // 寸 ±6%、透明度同相浮动——克制，不抢罗盘本体
+                const pulsePh = 0.5 + 0.5 * Math.sin(t * 1.7);
+                cp.pulse.position.copy(galWarpV);
+                const pulsePx = 52 * (1 + 0.06 * Math.sin(t * 1.7));
+                cp.pulse.scale.set(pulsePx * wpp, pulsePx * wpp, 1);
+                cp.pulseMat.opacity =
+                  (0.22 + 0.16 * pulsePh) * galFade * eNC;
                 toWorld(lbPxX, lbPxY, galWarpV);
                 cp.label.position.copy(galWarpV);
                 cp.label.scale.set(
@@ -15178,7 +19528,11 @@ export function Globe({
       // —— 流星雨速率曲线（与彗星同一条 3 分钟会话时钟）：1:30
       // 前速率为零（窗口外零痕迹）；1:30–2:30 由约 0.1 颗/秒渐
       // 强到约 2.7 颗/秒；2:30–3:00 峰值约 4.2 颗/秒（设计口径
-      // 3–5）、火流星占比升到 8%。reduced-motion 不生成（快速闪
+      // 3–5）。阶级占比全时段恒定（2026-11-16 晚修订定版：普通
+      // 52 / 明亮 27 / 火流星 8 / 蓝绿 10 / 最高阶陨石 3，见生
+      // 成段——火流星与蓝绿占比按用户令调低、份额回普通/明亮，
+      // 最高阶 3% 是陨石无条件规则的锚、一字不动）。
+      // reduced-motion 不生成（快速闪
       // 光对该偏好不友好）。生成累加吃 rawDt（真实帧间隔）：dt
       // 钳在 0.1 秒而窗口时钟走真实秒，低帧率下按 dt 计账会把
       // 生成率暗中稀释。夜半球薄壳雨已按 JI 22:55 口径整套移除，
@@ -15241,57 +19595,96 @@ export function Globe({
             curtainAcc += mRate * waveFactor * rawDt;
             while (curtainAcc >= 1) {
               curtainAcc -= 1;
-              if (curtainMeteors.length < 44) {
-                // 配色抽档（00:08 定版权重）：月白紫 55% / 蓝白
-                // 27% / 钙紫粉 13% / 镁绿白 5%；火流星放大改任意
-                // 档约 3% 叠加（同色系、尺寸/亮度 1.6–2×、不换
-                // 色），取代旧的分段概率 4%/8%
-                const vr = Math.random();
-                const v = vr < 0.55 ? 0 : vr < 0.82 ? 1 : vr < 0.95 ? 2 : 3;
-                const fire = Math.random() < 0.03;
-                // 陨石顶替判定（口径见 curtainRocks 处注）：最大
-                // 尺寸档（火流星）直接顶替为陨石——无概率掷骰、
-                // 不限峰值段、无每循环硬顶（JI 2026-11-13 令：
-                // 「直接把最大尺寸的火流星用陨石代替，不然概率
-                // 太低了」，推翻先前 0.35 概率 + 峰值段 + 每循
-                // 环一颗的稀有口径）。火流星档自此不再以流星形
-                // 态出现：凡抽中火流星，即生成一颗陨石
-                const toRock = fire;
+              if (curtainMeteors.length < 56) {
+                // —— 阶级分流（2026-11-16 狮子座注入定版、当晚
+                // 修订，一掷定阶级）：最高阶 3% → 陨石顶替 /
+                // 火流星 8%（cls 2、⑥ 档橙红）/ 蓝绿 10%（cls
+                // 3、⑤ 档蓝绿）/ 其余 79% 进常规池——池内再抽
+                // 四档色（月白紫 50 / 蓝白 27 / 钙紫粉 15 / 镁
+                // 绿白 8）并以约 34% 升明亮阶级（cls 1，池内占
+                // 比 → 全口径普通 ≈52% / 明亮 ≈27%）。全口径
+                // 色板：月白紫 ≈39.5%（仍第一大色、主调不变）/
+                // 蓝白 ≈21% / 钙紫粉 ≈12% / 蓝绿 10% / 火流星
+                // 橙 8% / 镁绿白 ≈6% / 陨石 3%。修订前口径（火
+                // 流星 13 / 蓝绿 16 / 普通 46 / 明亮 22）按用户
+                // 令「比例调低」作废：火流星降到高个位数、蓝绿
+                // 降到一成，让出份额回普通/明亮；最高阶 3% 是
+                // 陨石无条件规则的锚，不动。同屏存活上限 56 不
+                // 变：峰值稳态需求 = 4.2 颗/秒 × 最长寿命 2.3 秒
+                // ≈ 9.7 颗，56 只作防波次叠加失控的封顶（绘制
+                // 全走 2D 批绘：多边形填充 + 预渲染盖印，无逐颗
+                // 纹理/着色器切换，见交付账）。
+                const cr = Math.random();
+                // 陨石顶替判定（口径见 curtainRocks 处注）：最高
+                // 阶（3%）直接顶替为陨石——无概率掷骰、不限峰值
+                // 段、无每循环硬顶（JI 2026-11-13 终令，本轮一
+                // 字不动：新火流星阶级 cls=2 是独立的光轨阶级，
+                // 不经此判定、不落陨石）
+                const toRock = cr < 0.03;
+                let cls: 0 | 1 | 2 | 3 = 0;
+                let v = 0;
+                if (toRock) {
+                  v = 0;
+                } else if (cr < 0.11) {
+                  cls = 2;
+                  v = 5;
+                } else if (cr < 0.21) {
+                  cls = 3;
+                  v = 4;
+                } else {
+                  const vr = Math.random();
+                  v = vr < 0.5 ? 0 : vr < 0.77 ? 1 : vr < 0.92 ? 2 : 3;
+                  cls = Math.random() < 0.34 ? 1 : 0;
+                }
                 // 档位偏置（变体即参数：蓝白生来最快最细、钙紫粉
                 // 生来较慢较粗——边际权重精确，相关性由参数偏置
-                // 保证，不事后筛选）
+                // 保证，不事后筛选；只作用于常规池 cls 0/1，新阶
+                // 级 cls 2/3 有自己的速度/尺寸口径、不吃偏置）
                 // 速度定版（2026-11-13 09:30，用户：「星辰坠落
-                // 的速度不能太快」）：单颗寿命由旧 0.5–0.95 秒拉
-                // 到 1.4–2.2 秒（火流星 1.9–2.2），行程不变 → 坠
-                // 速降到旧约 1/2–1/3，匀速直坠、头尾全程可读；
-                // 同屏存活随寿命自然增至峰值约 8–12 条，存活上
-                // 限 44（2026-11-13 晚自 36 小升：本轮轨身加宽
-                // 加长后单颗更占眼、峰值段密度略补；出账：峰值
-                // 生成 4.2 颗/秒 × 最长寿命 2.2 秒 ≈ 9.2 的稳态
-                // 需求，44 是近 5 倍余量封顶、防波次叠加失控）
-                let life = fire
-                  ? 1.9 + Math.random() * 0.3
-                  : 1.4 + Math.random() * 0.8;
-                // 一生划行程 = 画面高 50%–85%：幕布的坠势靠长行程
-                let dist =
-                  curtainH *
-                  (fire
-                    ? 0.7 + Math.random() * 0.2
-                    : 0.5 + Math.random() * 0.35);
-                // 拖尾长度（2026-11-13 晚加长：治「太细太单
-                // 调」——轨长占幕高比例整体上调约三成）
-                let len =
-                  curtainH *
-                  (fire
-                    ? 0.37 + Math.random() * 0.09
-                    : 0.21 + Math.random() * 0.11);
+                // 的速度不能太快」）：普通单颗寿命 1.4–2.2 秒、
+                // 明亮 1.9–2.2 秒，行程不变 → 坠速降到旧约
+                // 1/2–1/3，匀速直坠、头尾全程可读。2026-11-16
+                // 新阶级速度口径（当晚修订）：火流星 1.9–2.3 秒
+                // （最长寿、拖得住余迹），轨宽基数由 4.4 收回
+                // 2.6——与明亮 3.0 / 普通 1.9 同量级，「不用这么
+                // 大」靠缩小个头、亮度靠头光强度（见绘制段）；
+                // 蓝绿原「71 km/s 快端」口径（寿命 0.85–1.25 秒、
+                // 表观速度约普通 1.6–2 倍）按用户令「蓝绿色也不
+                // 用太快」作废——寿命回 1.3–1.9 秒、行程 50%–80%
+                // 幕高，表观速度 ≈ 普通的 1.1 倍（至多略快），
+                // 身份改由蓝绿实色 + 针形承担（见绘制段）
+                let life: number;
+                let dist: number;
+                let len: number;
+                let wBase: number;
+                if (cls === 2) {
+                  life = 1.9 + Math.random() * 0.4;
+                  dist = curtainH * (0.72 + Math.random() * 0.2);
+                  len = curtainH * (0.4 + Math.random() * 0.1);
+                  wBase = 2.6;
+                } else if (cls === 3) {
+                  life = 1.3 + Math.random() * 0.6;
+                  dist = curtainH * (0.5 + Math.random() * 0.3);
+                  len = curtainH * (0.26 + Math.random() * 0.08);
+                  wBase = 1.15;
+                } else if (cls === 1) {
+                  life = 1.9 + Math.random() * 0.3;
+                  dist = curtainH * (0.7 + Math.random() * 0.2);
+                  len = curtainH * (0.37 + Math.random() * 0.09);
+                  wBase = 3.0;
+                } else {
+                  life = 1.4 + Math.random() * 0.8;
+                  dist = curtainH * (0.5 + Math.random() * 0.35);
+                  len = curtainH * (0.21 + Math.random() * 0.11);
+                  wBase = 1.9;
+                }
                 let wMul = 1;
-                if (v === 1) {
+                if (cls <= 1 && v === 1) {
                   life *= 0.9;
                   dist *= 1.08;
                   len *= 0.92;
                   wMul = 0.8;
-                } else if (v === 2) {
+                } else if (cls <= 1 && v === 2) {
                   life *= 1.1;
                   len *= 1.08;
                   wMul = 1.3;
@@ -15312,7 +19705,7 @@ export function Globe({
                     .join(",");
                 });
                 if (toRock) {
-                  // 陨石顶替本颗火流星：更沉更慢（行程 78%–95%
+                  // 陨石顶替本颗最高阶：更沉更慢（行程 78%–95%
                   // 幕高 / 寿命 2.6–3.2 秒），斜角与全幕同律（共
                   // 用生成段已掷定的 ang）
                   const rLife = 2.6 + Math.random() * 0.6;
@@ -15333,7 +19726,10 @@ export function Globe({
                     emberAcc: 0,
                     fragT: 0.5 + Math.random() * 0.5,
                   });
-                } else curtainMeteors.push({
+                } else {
+                  if (cls === 2) fireSpawnedTotal++;
+                  if (cls === 3) tealSpawnedTotal++;
+                  curtainMeteors.push({
                   x: Math.random() * curtainW * 1.04 - curtainW * 0.02,
                   y: -curtainH * 0.04 + Math.random() * curtainH * 0.09,
                   vx: Math.sin(ang) * spd,
@@ -15349,15 +19745,17 @@ export function Globe({
                   // 作「莫名其妙被放大」。补偿降到 1.1 后移动端
                   // 芯宽 ≈2.09（回到加强前 2.25 的量级）、晕半
                   // 宽 ≈7.5（加强轮的层叠辉光保留、总量回位）
-                  w: (fire ? 3.0 : 1.9) * wMul * (isCoarse ? 1.1 : 1),
-                  fire,
+                  w: wBase * wMul * (isCoarse ? 1.1 : 1),
+                  cls,
                   v,
                   cols,
                   sparkRgb: cols[2] ?? cols[0]!,
                   ph: Math.random() * Math.PI * 2,
                   shed: 0,
                   glint: 0.15 + Math.random() * 0.4,
-                });
+                  fxAcc: 0,
+                  });
+                }
               }
             }
           } else {
@@ -15398,6 +19796,60 @@ export function Globe({
                 });
               }
             }
+            // —— 火流星特效（2026-11-16，仅 cls=2）：沿途每约
+            // 0.05 秒在身后落一团持久余迹（curtainWakes，滞留
+            // 2.4–3.8 秒缓缓飘散）+ 剥落一粒火花（并入余烬池、
+            // 吃轻重力坠落）——余迹是狮子座火流星的招牌：流星
+            // 本体划走后，光迹还留在天上
+            if (dm.cls === 2 && dm.age < dm.life) {
+              dm.fxAcc += rawDt;
+              while (dm.fxAcc >= 0.05) {
+                dm.fxAcc -= 0.05;
+                const spd2 = Math.hypot(dm.vx, dm.vy) || 1;
+                const bux = dm.vx / spd2;
+                const buy = dm.vy / spd2;
+                if (curtainWakes.length < 240) {
+                  curtainWakes.push({
+                    x: dhx - bux * dm.w * 2 + (Math.random() - 0.5) * 6,
+                    y: dhy - buy * dm.w * 2 + (Math.random() - 0.5) * 6,
+                    vx: -dm.vx * 0.03 + (Math.random() - 0.5) * 7,
+                    vy: -dm.vy * 0.03 - 5 - Math.random() * 6,
+                    age: 0,
+                    life: 2.4 + Math.random() * 1.4,
+                    r0: 9 + Math.random() * 6,
+                    ph: Math.random() * Math.PI * 2,
+                  });
+                }
+                if (curtainEmbers.length < 320) {
+                  curtainEmbers.push({
+                    x: dhx - bux * dm.w * (1 + Math.random() * 2),
+                    y: dhy - buy * dm.w * (1 + Math.random() * 2),
+                    vx: -dm.vx * 0.14 + (Math.random() - 0.5) * 34,
+                    vy: -dm.vy * 0.14 + (Math.random() - 0.5) * 34,
+                    age: 0,
+                    life: 0.35 + Math.random() * 0.35,
+                    sz: 1 + Math.random() * 1.3,
+                  });
+                }
+                // 碎块剥落（2026-11-16 晚形态修订）：约 45% 的
+                // fx 节拍再剥一块带明显侧向分量的碎块——垂直轨
+                // 向分叉、寿数更长（0.5–0.85 秒），读作火球翻
+                // 滚时甩出、掉队的小火星，与贴身火花（上）分工
+                if (Math.random() < 0.45 && curtainEmbers.length < 320) {
+                  const side = Math.random() < 0.5 ? -1 : 1;
+                  const fsp = 26 + Math.random() * 32;
+                  curtainEmbers.push({
+                    x: dhx - bux * dm.w * 2,
+                    y: dhy - buy * dm.w * 2,
+                    vx: -dm.vx * 0.1 - buy * side * fsp,
+                    vy: -dm.vy * 0.1 + bux * side * fsp,
+                    age: 0,
+                    life: 0.5 + Math.random() * 0.35,
+                    sz: 1.1 + Math.random() * 1.2,
+                  });
+                }
+              }
+            }
             // —— 头部 glint：逐颗计时（0.35–0.8 秒一遇）在头部处
             // 闪一枚小星芒，一闪即过、颜色随本颗档走
             dm.glint -= rawDt;
@@ -15410,7 +19862,9 @@ export function Globe({
                   y: dhy,
                   age: 0,
                   life: 0.22 + Math.random() * 0.14,
-                  size: (dm.fire ? 15 : 11) + Math.random() * 4,
+                  size:
+                    (dm.cls === 2 ? 13 : dm.cls === 1 ? 15 : 11) +
+                    Math.random() * 4,
                   rgb: hv.halo.join(","),
                 });
               }
@@ -15418,15 +19872,35 @@ export function Globe({
             if (dm.age >= dm.life) {
               const ex = dm.x + dm.vx * dm.life;
               const ey = dm.y + dm.vy * dm.life;
-              // 落点星闪：终点炸开一枚四角星芒小闪光（机制不变）
+              // 落点星闪：终点炸开一枚四角星芒小闪光（机制不变；
+              // 火流星另加一圈闪爆 + 火花迸溅——末端闪爆是其第
+              // 三件套，与陨石的落点闪爆同池 curtainBooms）
               if (curtainFlashes.length < 24) {
                 curtainFlashes.push({
                   x: ex,
                   y: ey,
                   age: 0,
                   life: 0.24 + Math.random() * 0.1,
-                  size: dm.fire ? 30 : 19,
+                  size: dm.cls === 2 ? 34 : dm.cls === 1 ? 30 : 19,
                 });
+              }
+              if (dm.cls === 2) {
+                if (curtainBooms.length < 6) {
+                  curtainBooms.push({ x: ex, y: ey, age: 0, life: 0.45 });
+                }
+                for (let bi = 0; bi < 10 && curtainEmbers.length < 320; bi++) {
+                  const ba = Math.random() * Math.PI * 2;
+                  const bs = 35 + Math.random() * 110;
+                  curtainEmbers.push({
+                    x: ex,
+                    y: ey,
+                    vx: Math.cos(ba) * bs,
+                    vy: Math.sin(ba) * bs - 24,
+                    age: 0,
+                    life: 0.4 + Math.random() * 0.45,
+                    sz: 0.9 + Math.random() * 1.5,
+                  });
+                }
               }
               curtainMeteors.splice(i, 1);
             }
@@ -15462,7 +19936,7 @@ export function Globe({
             rk.emberAcc += rawDt;
             while (rk.emberAcc >= 0.02) {
               rk.emberAcc -= 0.02;
-              if (curtainEmbers.length < 240 && rk.age < rk.life) {
+              if (curtainEmbers.length < 320 && rk.age < rk.life) {
                 curtainEmbers.push({
                   x: rhx - rux * rk.r * (0.6 + Math.random() * 1.6),
                   y: rhy - ruy * rk.r * (0.6 + Math.random() * 1.6),
@@ -15494,10 +19968,10 @@ export function Globe({
             if (rk.age >= rk.life) {
               const ex = rk.x + rk.vx * rk.life;
               const ey = rk.y + rk.vy * rk.life;
-              if (curtainBooms.length < 4) {
+              if (curtainBooms.length < 6) {
                 curtainBooms.push({ x: ex, y: ey, age: 0, life: 0.5 });
               }
-              for (let bi = 0; bi < 16 && curtainEmbers.length < 240; bi++) {
+              for (let bi = 0; bi < 16 && curtainEmbers.length < 320; bi++) {
                 const ba = Math.random() * Math.PI * 2;
                 const bs = 40 + Math.random() * 130;
                 curtainEmbers.push({
@@ -15559,6 +20033,15 @@ export function Globe({
               curtainBooms.splice(i, 1);
             }
           }
+          // 火流星余迹推进：恒速缓漂（微上飘），只长老消亡——膨
+          // 胀与渐隐在绘制段按龄期算
+          for (let i = curtainWakes.length - 1; i >= 0; i--) {
+            const wk = curtainWakes[i]!;
+            wk.age += rawDt;
+            wk.x += wk.vx * rawDt;
+            wk.y += wk.vy * rawDt;
+            if (wk.age >= wk.life) curtainWakes.splice(i, 1);
+          }
           // 轨缀星点推进：原地不动（vx/vy 恒 0），只长老消亡
           for (let i = curtainSparks.length - 1; i >= 0; i--) {
             const sk = curtainSparks[i]!;
@@ -15615,6 +20098,7 @@ export function Globe({
             curtainEmbers.length > 0 ||
             curtainFrags.length > 0 ||
             curtainBooms.length > 0 ||
+            curtainWakes.length > 0 ||
             curtainSparks.length > 0 ||
             curtainFlashes.length > 0 ||
             curtainSparkles.length > 0 ||
@@ -15673,6 +20157,29 @@ export function Globe({
                 curtainCtx.fill();
               }
             }
+            // 火流星余迹（2026-11-16）：滞留光迹——每团随龄膨胀
+            // 约 3 倍、alpha 快速亮起后按 (1−n)^1.25 缓退，带一
+            // 点燃闪微颤；整片余迹是断续的光团链而非实线，读作
+            // 「烟似的光迹」，压在流星本体之下
+            for (const wk of curtainWakes) {
+              const wn = wk.age / wk.life;
+              const wa =
+                Math.min(1, wn / 0.08) *
+                Math.pow(1 - wn, 1.25) *
+                0.5 *
+                (0.85 + 0.15 * Math.sin(curtainTime * 17 + wk.ph * 3));
+              if (wa < 0.01) continue;
+              const ws = wk.r0 * 2 * (1 + wn * 2.1);
+              curtainCtx.globalAlpha = wa;
+              curtainCtx.drawImage(
+                wakeSprite,
+                wk.x - ws / 2,
+                wk.y - ws / 2,
+                ws,
+                ws,
+              );
+            }
+            curtainCtx.globalAlpha = 1;
             for (const m of curtainMeteors) {
               const n = m.age / m.life;
               // 龄期包络：快速淡入、后 45% 平滑收尾（与薄壳同口径）
@@ -15696,12 +20203,12 @@ export function Globe({
               const ty = hy - uy * tl;
               const headA = Math.min(
                 1,
-                env * (m.fire ? 1 : 0.92) * flick,
+                env * (m.cls === 0 ? 0.92 : 1) * flick,
               );
               // 拖尾渐变（00:08 变体定版）：按这颗星的档位取生成
               // 时预抖的停点——芯白 → 头微染 → 尾段色 → 透明渐
-              // 隐；火流星放大不换色，仍属本档（加码只在 headA
-              // 与光晕/线宽的尺寸倍率上）
+              // 隐；各阶级共用本档渐变，形态分化在轨层选择与
+              // 头部画法上（见下）
               const mkGrad = (k: number): CanvasGradient => {
                 const g = curtainCtx.createLinearGradient(hx, hy, tx, ty);
                 const vdef = CURTAIN_VARIANTS[m.v]!;
@@ -15756,17 +20263,73 @@ export function Globe({
               };
               // 四层半宽整体 ×~1.35（2026-11-13 晚加宽，外晕
               // 层 alpha 同步小升——拖尾要读成一片流光，不是线）
-              drawTail(m.w * 3.6, 0.62, 1, 0.2);
-              drawTail(m.w * 2.1, 0.72, 1, 0.5);
-              drawTail(m.w * 1.15, 0.85, 1, 0.78);
-              drawTail(m.w * 0.5, 1.05, 0.8, 1);
-              // 头：星芒爆点（卡图签名）——全幕最亮。先盖按档预
-              // 渲染柔光晕，其上画多角星芒：外层本档 halo 色四
-              // 角长芒 + 四条 45° 斜细芒，内层近白四角星收一
-              // 档，最后压一枚纯白小核。芒形与落点星闪同制（圆
-              // 角四角星 path），尺度随闪烁小幅胀缩。
+              // —— 2026-11-16 晚形态分化（用户令「特效和形状要
+              // 和其他的有区别、蓝绿色也是」）：普通/明亮保持
+              // 四层柔尾作全幕基准不动；火流星与蓝绿各走自己的
+              // 形态语言，与基准一眼可分——
+              // · 火流星：废掉光滑长尾，只留一条压淡的底光 + 一
+              //   条细芯，其上断续排 8 团抖动火焰团（wakeSprite
+              //   小盖印、垂直轨向正弦抖动、向尾渐小渐淡）——
+              //   尾是「一团团火」，不是「一条光带」；飞行中的
+              //   火焰团链与落地后的持久余迹（curtainWakes）同
+              //   精灵不同寿数，前者随星走、后者留在原地
+              // · 蓝绿：针形——只留收束的两层细轨（薄鞘 + 芯
+              //   线），不铺宽晕、不散开，快慢已回普通档、靠
+              //   「细、直、锐」立身份
+              if (m.cls === 3) {
+                drawTail(m.w * 1.5, 0.9, 1, 0.55);
+                drawTail(m.w * 0.62, 1.1, 1, 1);
+              } else if (m.cls === 2) {
+                drawTail(m.w * 2.6, 0.6, 1, 0.16);
+                drawTail(m.w * 0.55, 1.0, 0.8, 0.85);
+                const puffs = 8;
+                for (let k = 1; k <= puffs; k++) {
+                  const t = k / (puffs + 1);
+                  const jx =
+                    Math.sin(curtainTime * 26 + m.ph * 3 + k * 1.9) *
+                    (2 + t * 5);
+                  const cxp = hx - ux * tl * t + px * jx;
+                  const cyp = hy - uy * tl * t + py * jx;
+                  const ps =
+                    (30 - t * 16) *
+                    (0.8 +
+                      0.25 *
+                        Math.sin(curtainTime * 31 + m.ph + k * 2.7));
+                  curtainCtx.globalAlpha = headA * 0.5 * (1 - t * 0.75);
+                  curtainCtx.drawImage(
+                    wakeSprite,
+                    cxp - ps / 2,
+                    cyp - ps / 2,
+                    ps,
+                    ps,
+                  );
+                }
+                curtainCtx.globalAlpha = 1;
+              } else {
+                drawTail(m.w * 3.6, 0.62, 1, 0.2);
+                drawTail(m.w * 2.1, 0.72, 1, 0.5);
+                drawTail(m.w * 1.15, 0.85, 1, 0.78);
+                drawTail(m.w * 0.5, 1.05, 0.8, 1);
+              }
+              // 头：先盖按档预渲染柔光晕，其上按阶级分形态——
+              // · 普通/明亮：星芒爆点（卡图签名）——外层本档
+              //   halo 色四角长芒 + 四条 45° 斜细芒，内层近白
+              //   四角星收一档，最后压一枚纯白小核（基准形态，
+              //   不动）
+              // · 火流星：不规则火球——9 顶点多边形、每顶点半
+              //   径被两频正弦逐帧抖动（边缘翻滚感），外焰橙 /
+              //   中焰亮橙 / 白炽芯三层同心叠；头后拖两枚更小
+              //   的抖动火团（贴身翻滚的碎焰）。无星芒——与
+              //   「干净星芒头」一眼可分
+              // · 蓝绿：针头——一枚 halo 色紧致小光斑 + 纯白极
+              //   小核，无星芒、无斜芒，小而紧
+              // 盖印尺寸 2026-11-16 晚修订：火流星 118→56px
+              // （与明亮 68 / 普通 42 同量级——用户令「火流星
+              // 不用这么大」；金星级指的是亮度强度：头光 alpha
+              // 与芯光不降、只收个头）；蓝绿 48→30px（针头小
+              // 而紧）
               const gs =
-                (m.fire ? 68 : 42) *
+                (m.cls === 2 ? 56 : m.cls === 1 ? 68 : m.cls === 3 ? 30 : 42) *
                 (1 + 0.12 * Math.sin(curtainTime * 9 + m.ph)) *
                 (0.9 + 0.2 * (flick - 1));
               curtainCtx.globalAlpha = Math.min(1, env * 0.95 * flick);
@@ -15779,66 +20342,149 @@ export function Globe({
               );
               curtainCtx.globalAlpha = 1;
               const haloRgb = CURTAIN_VARIANTS[m.v]!.halo.join(",");
-              const bR =
-                (m.fire ? 34 : 22) * (0.92 + 0.16 * (flick - 1));
-              const star4 = (s: number, inset: number): void => {
+              if (m.cls === 2) {
+                // —— 火流星火球头：不规则抖动多边形三层叠（外
+                // 焰 / 中焰 / 白炽芯）+ 头后两枚贴身碎焰团；顶
+                // 点半径两频正弦逐帧抖动 → 边缘恒在翻滚，无一
+                // 帧与上一帧同形
+                const blob = (
+                  cxp: number,
+                  cyp: number,
+                  R: number,
+                  seed: number,
+                  fill: string,
+                ): void => {
+                  curtainCtx.fillStyle = fill;
+                  curtainCtx.beginPath();
+                  const NV = 9;
+                  for (let vi = 0; vi < NV; vi++) {
+                    const a = (vi / NV) * Math.PI * 2;
+                    const rr =
+                      R *
+                      (1 +
+                        0.26 *
+                          Math.sin(
+                            curtainTime * 21 + m.ph * 3 + seed + vi * 2.4,
+                          ) +
+                        0.16 *
+                          Math.sin(
+                            curtainTime * 33 + m.ph * 1.3 + seed * 2 + vi * 4.1,
+                          ));
+                    const vx2 = cxp + Math.cos(a) * rr;
+                    const vy2 = cyp + Math.sin(a) * rr;
+                    if (vi === 0) curtainCtx.moveTo(vx2, vy2);
+                    else curtainCtx.lineTo(vx2, vy2);
+                  }
+                  curtainCtx.closePath();
+                  curtainCtx.fill();
+                };
+                for (let bi = 2; bi >= 1; bi--) {
+                  const bx2 = hx - ux * m.w * 2.6 * bi;
+                  const by2 = hy - uy * m.w * 2.6 * bi;
+                  const jxp =
+                    Math.sin(curtainTime * 24 + m.ph + bi * 2.2) * 2.4;
+                  const jyp =
+                    Math.cos(curtainTime * 27 + m.ph * 1.4 + bi * 1.7) * 2.4;
+                  blob(
+                    bx2 + px * jxp,
+                    by2 + py * jxp + jyp * 0.4,
+                    m.w * (bi === 2 ? 1.05 : 1.5),
+                    bi * 3.7,
+                    `rgba(240,84,26,${headA * (bi === 2 ? 0.4 : 0.55)})`,
+                  );
+                }
+                blob(
+                  hx,
+                  hy,
+                  m.w * 3.3,
+                  0,
+                  `rgba(240,84,26,${headA * 0.75})`,
+                );
+                blob(
+                  hx,
+                  hy,
+                  m.w * 2.1,
+                  5.1,
+                  `rgba(255,166,66,${headA * 0.9})`,
+                );
+                blob(hx, hy, m.w * 1.2, 9.3, `rgba(255,246,224,${headA})`);
+              } else if (m.cls === 3) {
+                // —— 蓝绿针头：紧致小光斑 + 极小白核，无星芒
+                curtainCtx.fillStyle = `rgba(${haloRgb},${headA * 0.75})`;
                 curtainCtx.beginPath();
-                curtainCtx.moveTo(hx, hy - s);
-                curtainCtx.quadraticCurveTo(
-                  hx + inset,
-                  hy - inset,
-                  hx + s,
-                  hy,
-                );
-                curtainCtx.quadraticCurveTo(
-                  hx + inset,
-                  hy + inset,
-                  hx,
-                  hy + s,
-                );
-                curtainCtx.quadraticCurveTo(
-                  hx - inset,
-                  hy + inset,
-                  hx - s,
-                  hy,
-                );
-                curtainCtx.quadraticCurveTo(
-                  hx - inset,
-                  hy - inset,
-                  hx,
-                  hy - s,
-                );
-                curtainCtx.closePath();
+                curtainCtx.arc(hx, hy, Math.max(2.6, m.w * 2), 0, Math.PI * 2);
                 curtainCtx.fill();
-              };
-              curtainCtx.fillStyle = `rgba(${haloRgb},${headA * 0.55})`;
-              star4(bR, bR * 0.1);
-              // 斜芒：四条细三角（45° 向、半长 0.48R）
-              curtainCtx.fillStyle = `rgba(${haloRgb},${headA * 0.45})`;
-              for (const [dx, dy] of [
-                [1, 1],
-                [1, -1],
-                [-1, 1],
-                [-1, -1],
-              ] as const) {
-                const dl = Math.SQRT1_2;
-                const tipX = hx + dx * dl * bR * 0.48;
-                const tipY = hy + dy * dl * bR * 0.48;
-                const wx = -dy * dl * bR * 0.055;
-                const wy = dx * dl * bR * 0.055;
+                curtainCtx.fillStyle = `rgba(255,255,255,${headA})`;
                 curtainCtx.beginPath();
-                curtainCtx.moveTo(hx + wx, hy + wy);
-                curtainCtx.lineTo(tipX, tipY);
-                curtainCtx.lineTo(hx - wx, hy - wy);
-                curtainCtx.closePath();
+                curtainCtx.arc(
+                  hx,
+                  hy,
+                  Math.max(1.4, m.w * 1.05),
+                  0,
+                  Math.PI * 2,
+                );
+                curtainCtx.fill();
+              } else {
+                const bR = (m.cls === 1 ? 34 : 22) * (0.92 + 0.16 * (flick - 1));
+                const star4 = (s: number, inset: number): void => {
+                  curtainCtx.beginPath();
+                  curtainCtx.moveTo(hx, hy - s);
+                  curtainCtx.quadraticCurveTo(
+                    hx + inset,
+                    hy - inset,
+                    hx + s,
+                    hy,
+                  );
+                  curtainCtx.quadraticCurveTo(
+                    hx + inset,
+                    hy + inset,
+                    hx,
+                    hy + s,
+                  );
+                  curtainCtx.quadraticCurveTo(
+                    hx - inset,
+                    hy + inset,
+                    hx - s,
+                    hy,
+                  );
+                  curtainCtx.quadraticCurveTo(
+                    hx - inset,
+                    hy - inset,
+                    hx,
+                    hy - s,
+                  );
+                  curtainCtx.closePath();
+                  curtainCtx.fill();
+                };
+                curtainCtx.fillStyle = `rgba(${haloRgb},${headA * 0.55})`;
+                star4(bR, bR * 0.1);
+                // 斜芒：四条细三角（45° 向、半长 0.48R）
+                curtainCtx.fillStyle = `rgba(${haloRgb},${headA * 0.45})`;
+                for (const [dx, dy] of [
+                  [1, 1],
+                  [1, -1],
+                  [-1, 1],
+                  [-1, -1],
+                ] as const) {
+                  const dl = Math.SQRT1_2;
+                  const tipX = hx + dx * dl * bR * 0.48;
+                  const tipY = hy + dy * dl * bR * 0.48;
+                  const wx = -dy * dl * bR * 0.055;
+                  const wy = dx * dl * bR * 0.055;
+                  curtainCtx.beginPath();
+                  curtainCtx.moveTo(hx + wx, hy + wy);
+                  curtainCtx.lineTo(tipX, tipY);
+                  curtainCtx.lineTo(hx - wx, hy - wy);
+                  curtainCtx.closePath();
+                  curtainCtx.fill();
+                }
+                curtainCtx.fillStyle = `rgba(255,255,255,${headA * 0.95})`;
+                star4(bR * 0.55, bR * 0.055);
+                curtainCtx.fillStyle = `rgba(255,255,255,${headA})`;
+                curtainCtx.beginPath();
+                curtainCtx.arc(hx, hy, Math.max(1.4, m.w * 0.85), 0, Math.PI * 2);
                 curtainCtx.fill();
               }
-              curtainCtx.fillStyle = `rgba(255,255,255,${headA * 0.95})`;
-              star4(bR * 0.55, bR * 0.055);
-              curtainCtx.fillStyle = `rgba(255,255,255,${headA})`;
-              curtainCtx.beginPath();
-              curtainCtx.arc(hx, hy, Math.max(1.4, m.w * 0.85), 0, Math.PI * 2);
-              curtainCtx.fill();
             }
             // —— 陨石绘制：先加色层（身后余烬辉 + 双层火焰锥），
             // 再切 source-over 压实心岩体（'lighter' 下暗像素加不
@@ -16143,6 +20789,15 @@ export function Globe({
           starWeights.spica = seasonWeight(119, nowD);
         }
         const boardFade = sunFade * (1 - eG);
+        // 全览整组隐藏（2026-11-15 用户点名口径：太阳系背景
+        // 八星——冬/夏大三角 + 天鹅座β + 角宿一——在全览模
+        // 式整组收起，星体/连线/名签一并淡出；默认近距模式
+        // 按现行季节权重逻辑正常体现。zodiacFigK 即全览在
+        // 位系数（与上方太阳系帧段同一份状态），故模式淡变
+        // = boardFade × (1 − zodiacFigK)，与骨架图形的淡入
+        // 严格互补、同拍交叉。角宿一名签的季节常驻破例只
+        // 管季节口径、不对抗模式口径——全览里同样收起）
+        const starModeFade = boardFade * (1 - zodiacFigK);
         starBoard.visible = boardFade > 0.02 && eG < 0.05;
         if (starBoard.visible && !starWorldReady) {
           layoutStarWorld();
@@ -16203,7 +20858,7 @@ export function Globe({
             ns.labelShiftTX = 0;
             ns.labelShiftTY = 0;
             let cand: StarCardCand | null = null;
-            if (target > 0 && boardFade > 0.05) {
+            if (target > 0 && starModeFade > 0.05) {
               // 判定点 = 卡片中心：星点投影 + 登记的中心偏移（与
               // 逐帧定位同一套锚定，见下方名签定位段）。星在相机
               // 背后/离屏时投影无意义（镜像垃圾坐标会误判相撞），
@@ -16225,7 +20880,10 @@ export function Globe({
                 };
               }
             }
-            ns.labelFadeT = target;
+            // 全览在位时目标恒 0（随 zodiacFigK 平滑收起，
+            // 彗星名卡的八星障碍矩形读同一份 labelFadeT、全
+            // 览里自动不再占位）
+            ns.labelFadeT = target * (1 - zodiacFigK);
             if (cand) starCands.push(cand);
           }
           // 卡间扇开：按优先级从高到低逐张落位（高优先卡恒占原
@@ -16320,7 +20978,8 @@ export function Globe({
             tw = 1 + twAmp * twS;
           }
           // 非当令退微光：星点尚在（0.15 地板），不当令不消失
-          const vis = boardFade * (0.15 + 0.85 * wgt) * tw;
+          // （模式淡变 starModeFade：全览整组收起、近距原样）
+          const vis = starModeFade * (0.15 + 0.85 * wgt) * tw;
           ns.glowMat.opacity = Math.min(1, 0.88 * ns.base * vis);
           ns.coreMat.opacity = Math.min(1, 0.92 * ns.base * vis);
           ns.glow.scale.setScalar(ns.glowBase * (1 + (tw - 1) * 0.38));
@@ -16342,7 +21001,7 @@ export function Globe({
               (ns.labelShiftTX - ns.labelShiftX) * starEase;
             ns.labelShiftY +=
               (ns.labelShiftTY - ns.labelShiftY) * starEase;
-            const lo = boardFade * ns.labelFade;
+            const lo = starModeFade * ns.labelFade;
             // 背面/离屏剔除（2026-11-13 横向溢出定版）：旧口径只看
             // 投影 z<1——星点转到相机背后时 project() 除以负 w，
             // x/y 镜像翻飞到视口外数千 px，卡片 visibility 仍可能
@@ -16425,17 +21084,18 @@ export function Globe({
             }
           }
         }
-        winterTri.mat.opacity = 0.32 * starWeights.winter * boardFade;
-        summerTri.mat.opacity = 0.32 * starWeights.summer * boardFade;
+        winterTri.mat.opacity = 0.32 * starWeights.winter * starModeFade;
+        summerTri.mat.opacity = 0.32 * starWeights.summer * starModeFade;
       }
 
-      // —— 具名彗星名卡（哈雷/恩克/潘斯达斯/艾森）：与八星名卡
+      // —— 具名彗星名卡（哈雷/恩克/潘斯达斯/艾森/坦普尔–塔特
+      // 尔）：与八星名卡
       // 同层同纪律——starLabelLayer 最高层级、不让位任何数据标
       // 签；逐帧直锚彗头世界投影（彗星在 solarGroup 内、组带旋
       // 转/缩放/平移，必须经 matrixWorld 转世界坐标，不许拿本地
       // 坐标冒充）；背面/离屏剔除时 transform 归零停泊（横向出
       // 界纪律同八星段）；贴边翻转整卡留屏内。互避每 6 帧判定：
-      // 八星已落位卡面作固定障碍、四张彗星卡之间按优先级扇开
+      // 八星已落位卡面作固定障碍、五张彗星卡之间按优先级扇开
       // （锚钉彗头、偏移封顶 48px 平滑跟随），推不开才淡出。
       // 透明度 = 本帧总淡化 × (0.45 + 0.55×活跃度)：远方暗核期
       // 卡片半透可凭卡认星、活跃期全显。

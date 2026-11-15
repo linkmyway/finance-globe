@@ -515,7 +515,7 @@ export function zodiacSignFor(lonDeg: number): string {
 
 type ElementsRow = [number, number, number, number, number, number];
 
-interface GeoPlanetDef {
+export interface GeoPlanetDef {
   id: string;
   name: string;
   color: string;
@@ -555,7 +555,41 @@ const GEO_ELEMENTS: Record<string, GeoPlanetDef> = {
     el: [9.53667594, 0.05386179, 2.48599187, 49.95424423, 92.59887831, 113.66242448],
     rates: [-0.0012506, -0.00050991, 0.00193609, 1222.49362201, -0.41897216, -0.28867794],
   },
+  // 天王/海王（2026-11-15 世事占星卡扩）：与 globeMath.PLANET_ELEMENTS
+  // 同一份 JPL Table 1 根数，走同一条地心换算链，不另立口径。
+  uranus: {
+    id: "uranus", name: "天王星", color: "#9fd8d4",
+    el: [19.18916464, 0.04725744, -0.77263783, 313.23810451, 170.9542763, 74.01692503],
+    rates: [-0.00196176, -0.00004397, -0.00242939, 428.48202785, 0.40805281, 0.04240589],
+  },
+  neptune: {
+    id: "neptune", name: "海王星", color: "#7d9fe8",
+    el: [30.06992276, 0.00859048, 1.77004347, -55.12002969, 44.96476227, 131.78422574],
+    rates: [0.00026291, 0.00005105, 0.00035372, 218.45945325, -0.32241464, -0.00508664],
+  },
+  // 冥王星（2026-11-15）：JPL Table 1 不收冥王星，此行用同文
+  // Table 2 的附加根数（1800–2050 有效，精度低于 Table 1）；只供
+  // 世事占星卡「土冥相位角」一行目安，不入八星轮盘与两两相位。
+  pluto: {
+    id: "pluto", name: "冥王星", color: "#c9a0b4",
+    el: [39.482, 0.2488, 17.14, 238.929, 224.069, 110.299],
+    rates: [0.0, 0.0, 0.0, 145.18, -0.011, -0.009],
+  },
 };
+
+/** 世事占星卡的七行星（由内到外；太阳另由 sunGeocentricEcliptic 给） */
+export const ASTRO_PLANETS: GeoPlanetDef[] = [
+  GEO_ELEMENTS.mercury!,
+  GEO_ELEMENTS.venus!,
+  GEO_ELEMENTS.mars!,
+  GEO_ELEMENTS.jupiter!,
+  GEO_ELEMENTS.saturn!,
+  GEO_ELEMENTS.uranus!,
+  GEO_ELEMENTS.neptune!,
+];
+
+/** 冥王星定义（仅供土冥相位角，见上方注） */
+export const PLUTO_DEF: GeoPlanetDef = GEO_ELEMENTS.pluto!;
 
 /** 「今晚黄道」卡画的行星（由内到外） */
 export const TONIGHT_PLANETS: GeoPlanetDef[] = [
@@ -605,7 +639,22 @@ export interface EclipticCoord {
   latDeg: number;
 }
 
-/** 行星地心黄道经纬（度）：日心坐标行星减地球 */
+/**
+ * 黄经岁差（度）：IAU 简式 ψ ≈ 50.29″/年 × 自 J2000.0 起的年数。
+ * 2026-11-15 主座实测：Table 1 链是 J2000 平黄道口径、未对齐当日，
+ * 与 DE421 比对有共同系统偏差 ≈ −0.36°（三日期太阳 −0.358°/
+ * −0.376°/−0.377°，与岁差累积逐年对齐）；扣掉后各行星残差仅角
+ * 分级。故在 Table 1 地心链的两个出口（行星/太阳地心黄经）统一
+ * 加 ψ 对齐当日回归黄道——今晚黄道卡与世事占星卡共用同一修正后
+ * 口径。月亮走 Meeus 另一公式、无此偏差（实测 −0.7′～+4.7′），
+ * moonLongitude / moonEcliptic / moonElongationDeg 一律不加修正。
+ */
+export function eclipticPrecessionDeg(date: Date): number {
+  const JD = date.getTime() / 86400000 + 2440587.5;
+  return (50.29 / 3600) * ((JD - 2451545.0) / 365.25);
+}
+
+/** 行星地心黄道经纬（度）：日心坐标行星减地球，黄经已作岁差对齐 */
 export function planetGeocentricEcliptic(
   def: GeoPlanetDef,
   date: Date,
@@ -616,16 +665,22 @@ export function planetGeocentricEcliptic(
   const dy = p[1] - e[1];
   const dz = p[2] - e[2];
   return {
-    lonDeg: norm360(Math.atan2(dy, dx) / (Math.PI / 180)),
+    lonDeg: norm360(
+      Math.atan2(dy, dx) / (Math.PI / 180) + eclipticPrecessionDeg(date),
+    ),
     latDeg: Math.atan2(dz, Math.hypot(dx, dy)) / (Math.PI / 180),
   };
 }
 
-/** 太阳地心黄经（度）：地球日心黄经 + 180°，与行星同一条换算链 */
+/** 太阳地心黄经（度）：地球日心黄经 + 180°，与行星同一条换算链，黄经已作岁差对齐 */
 export function sunGeocentricEcliptic(date: Date): EclipticCoord {
   const e = helioRectEcl(GEO_ELEMENTS.earth!, date);
   return {
-    lonDeg: norm360(Math.atan2(e[1], e[0]) / (Math.PI / 180) + 180),
+    lonDeg: norm360(
+      Math.atan2(e[1], e[0]) / (Math.PI / 180) +
+        180 +
+        eclipticPrecessionDeg(date),
+    ),
     latDeg: 0,
   };
 }

@@ -13,6 +13,7 @@ import { api, type ApiResponse } from "./api";
 import type { CenterInfo, CountryCode, IndexBoardInfo } from "./Globe";
 import { REGION_LEGEND, regionColorFor } from "./nationColors";
 import {
+ASTRO_PLANETS,
 eclipticAltAzTokyo,
 eclipseOutlook,
 moonEcliptic,
@@ -27,6 +28,7 @@ ZODIAC_SIGNS,
 type EclipticCoord,
 type EclipseVisibility,
 } from "./moonPhase";
+import { PLANET_ELEMENTS, planetLongitude } from "./globeMath";
 import {
 CABLES,
 CABLE_CONTINENT_LABEL,
@@ -34,6 +36,11 @@ cableStatusFor,
 type CableContinent,
 type CableStatusInfo,
 } from "./cablesData";
+import {
+ASPECT_DEFS,
+computeMundaneAstro,
+type MundaneAstroData,
+} from "./mundaneAstro";
 
 // 地球（three.js + 地理/灯光数据）是整个包的大头：懒加载成异步块，
 // 数据面板与状态条先渲染可读，地球随后填入固定高度的区域（不跳版）。
@@ -238,6 +245,95 @@ const HOME_PLANET_MENU: string[] = [
   "moon",
   "suisei",
 ];
+
+/**
+ * 聚焦信息片的落宫读数（2026-11-15 地心视线桥轮，用户原则「一个
+ * 画面只许一个中心」）：太阳系画面是日心、管结构；一切读数归地
+ * 心、管判断。行星并列两行——日心落宫（它在黄道环前站着的宫，
+ * 黄经走 globeMath.planetLongitude、与场景落位同源）与地心落宫
+ * （从地球看过去的宫，走 moonPhase 地心链 planetGeocentric-
+ * Ecliptic、与世事占星卡同源同函数，岁差已对齐当日回归黄道）。
+ * 点选状态下即成立（不依赖某一帧视角）；两宫不一致时另起一行
+ * 明说「日心在 X 宫 · 地球看在 Y 宫」，一致时只两行如实并列、
+ * 不假装有差异。太阳/月亮同理只给地心读数：太阳的日心方向就
+ * 是地球本身、月亮绕地球转，日心落宫对它们没有占星意义。
+ * 地球（2026-11-15 补洞，用户实报「点地球什么都没有」）：它
+ * 是观察点本身、没有「从地球看地球」的落宫——牌上明说这一
+ * 句，再给两个真读数：地球此刻的日心站位宫（站在环的哪一
+ * 格，走日心链 planetLongitude），与从地球看太阳的落宫
+ * （地心链 sunGeocentricEcliptic，与世事占星卡同源）；场景
+ * 里的视线画地球→太阳这一条（见 Globe 视线桥帧段）。星街
+ * 彗星是虚构客串、无星历链，不给读数。
+ * 每分钟重算一次，与天文卡同节拍。
+ */
+function BodySignReadings({ id }: { id: string }) {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 60000);
+    return () => clearInterval(t);
+  }, []);
+  const fmt = (lonDeg: number): string =>
+    `${zodiacSignFor(lonDeg)} ${(lonDeg % 30).toFixed(1)}°`;
+  if (id === "earth") {
+    // 地球是观察点本身：没有「从地球看地球」的落宫（明说），
+    // 给的是它站在环哪一格（日心站位）与站在它上面看太阳落
+    // 哪一宫（地心链太阳黄经）——站在地球上最有意义的读数对
+    const pdefE = PLANET_ELEMENTS.find((p) => p.id === "earth");
+    const helioLonE = pdefE
+      ? (((planetLongitude(pdefE, now) * 180) / Math.PI) % 360 + 360) % 360
+      : null;
+    const sunLon = sunGeocentricEcliptic(now).lonDeg;
+    return (
+      <>
+        <p className="mt-0.5 text-[11px] text-[var(--dim)]">
+          地球是观察点本身，没有「从地球看地球」的落宫
+        </p>
+        {helioLonE !== null && (
+          <p className="num mt-0.5 text-[11px] text-[var(--text)]">
+            日心站位 {fmt(helioLonE)}
+          </p>
+        )}
+        <p className="num mt-0.5 text-[11px] text-[var(--text)]">
+          从地球看太阳 {fmt(sunLon)}
+        </p>
+      </>
+    );
+  }
+  if (id === "sun" || id === "moon") {
+    const lon =
+      id === "sun"
+        ? sunGeocentricEcliptic(now).lonDeg
+        : moonEcliptic(now).lonDeg;
+    return (
+      <p className="num mt-0.5 text-[11px] text-[var(--text)]">
+        地心落宫 {fmt(lon)}
+      </p>
+    );
+  }
+  const adef = ASTRO_PLANETS.find((p) => p.id === id);
+  const pdef = PLANET_ELEMENTS.find((p) => p.id === id);
+  if (!adef || !pdef) return null;
+  const helioLon =
+    (((planetLongitude(pdef, now) * 180) / Math.PI) % 360 + 360) % 360;
+  const geoLon = planetGeocentricEcliptic(adef, now).lonDeg;
+  const helioSign = zodiacSignFor(helioLon);
+  const geoSign = zodiacSignFor(geoLon);
+  return (
+    <>
+      <p className="num mt-0.5 text-[11px] text-[var(--text)]">
+        日心落宫 {fmt(helioLon)}
+      </p>
+      <p className="num mt-0.5 text-[11px] text-[var(--text)]">
+        地心落宫 {fmt(geoLon)}
+      </p>
+      {helioSign !== geoSign && (
+        <p className="mt-0.5 text-[11px] text-[#ffd98f]">
+          日心在{helioSign}宫 · 地球看在{geoSign}宫
+        </p>
+      )}
+    </>
+  );
+}
 
 /** 租金九城 → 国家色（与 nationColors 同一色板；COUNTRY_META 只含
  *  监控三国，租金点色在这里按国家代码查全色板）。country 仅用于
@@ -1080,10 +1176,446 @@ function EclipticTonightCard() {
       </div>
       <p className="mt-3 text-[11px] leading-relaxed text-[var(--dim)]">
         来源：与月相卡同一套天文算法实时计算（月球黄经黄纬 Meeus
-        历表、行星地心黄经由 JPL 轨道根数换算、地平坐标按东京
-        35.68°N）· 时点为东京下一个午夜 0:00
+        历表、行星地心黄经由 JPL 轨道根数换算、黄经已作岁差对齐
+        当日回归黄道、地平坐标按东京 35.68°N）· 时点为东京下一
+        个午夜 0:00
       </p>
     </section>
+  );
+}
+
+/**
+ * 世事占星卡（2026-11-15 新增，天文卡组第三张，紧跟今晚黄道卡）：
+ * 只做事件层——黄道轮盘（示意图）+ 入座 / 正在成相 / 逆行站 /
+ * 木土大周期四组事件，每条事件配一句由确定性规则表拼装的占星
+ * 结论，「本期主结论」按写明规则（周期级优先 → 容许度最小的成
+ * 相 → 下一笔入座）置顶。全部由 mundaneAstro.computeMundaneAstro
+ * 以同一套星历（JPL Table 1 地心黄经、岁差已对齐当日回归黄道）
+ * 在打开时算一次（按小时缓存），不逐帧跑。轮盘画法：白羊 0° 在
+ * 左、黄经逆时针递增（星盘通行画法），八星以单字标落轮，内圈
+ * 连正在成相的相位线，下一笔入座的目标宫淡金高亮。
+ */
+function MundaneAstrologyCard() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 60000);
+    return () => clearInterval(id);
+  }, []);
+  const hourKey = Math.floor(now.getTime() / 3600000);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const data: MundaneAstroData = useMemo(
+    () => computeMundaneAstro(new Date()),
+    [hourKey],
+  );
+
+  const fmtDayTime = (d: Date): string =>
+    `${fmtJstDayFull(d)} ${fmtJstTime(d)}`;
+  const fmtDayTimeShort = (d: Date): string => {
+    const md = new Intl.DateTimeFormat("zh-CN", {
+      timeZone: "Asia/Tokyo",
+      month: "numeric",
+      day: "numeric",
+    }).format(d);
+    return `${md} ${fmtJstTime(d)}`;
+  };
+
+  // ---- 轮盘几何（viewBox 320×320，白羊 0° 在左、逆时针递增）
+  const C = 160;
+  const R_OUT = 152;
+  const R_IN = 124;
+  const pt = (lonDeg: number, r: number): { x: number; y: number } => {
+    const a = (lonDeg * Math.PI) / 180;
+    return { x: C - r * Math.cos(a), y: C - r * Math.sin(a) };
+  };
+  // 近邻行星径向错档（合相双星如火/木相距 0.5°，同环必叠字）
+  const wheelBodies = useMemo(() => {
+    const sorted = [...data.bodies].sort((a, b) => a.lonDeg - b.lonDeg);
+    const levels = new Map<string, number>();
+    let lastLon = -Infinity;
+    let level = 0;
+    for (const b of sorted) {
+      if (b.lonDeg - lastLon < 7) level = (level + 1) % 3;
+      else level = 0;
+      levels.set(b.body.id, level);
+      lastLon = b.lonDeg;
+    }
+    return data.bodies.map((b) => {
+      const lv = levels.get(b.body.id) ?? 0;
+      const r = 106 - lv * 19;
+      return { ...b, r, ...pt(b.lonDeg, r) };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
+  const wheelById = new Map(wheelBodies.map((b) => [b.body.id, b]));
+  const hlSignIdx = data.nextIngress
+    ? ZODIAC_SIGNS.indexOf(
+        data.nextIngress.toSign as (typeof ZODIAC_SIGNS)[number],
+      )
+    : -1;
+  const hlPath = ((): string => {
+    if (hlSignIdx < 0) return "";
+    const a0 = hlSignIdx * 30;
+    const a1 = a0 + 30;
+    const o0 = pt(a0, R_OUT);
+    const o1 = pt(a1, R_OUT);
+    const i1 = pt(a1, R_IN);
+    const i0 = pt(a0, R_IN);
+    return `M ${o0.x.toFixed(1)} ${o0.y.toFixed(1)} A ${R_OUT} ${R_OUT} 0 0 0 ${o1.x.toFixed(1)} ${o1.y.toFixed(1)} L ${i1.x.toFixed(1)} ${i1.y.toFixed(1)} A ${R_IN} ${R_IN} 0 0 1 ${i0.x.toFixed(1)} ${i0.y.toFixed(1)} Z`;
+  })();
+
+  return (
+    <section className="glass p-4 sm:p-5" aria-label="世事占星">
+      <div className="mb-1 flex items-baseline justify-between gap-2">
+        <h2 className="font-display text-lg font-semibold tracking-wide text-[#eaf3ff]">
+          世事占星
+        </h2>
+        <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[11px] text-[var(--dim)]">
+          {fmtDayTimeShort(data.computedAt)} · 东京
+        </span>
+      </div>
+      <p className="mb-3 text-xs text-[var(--dim)]">
+        占星传统的规则化解读，非实证预测
+      </p>
+
+      {/* 本期主结论（置顶）：选择规则见卡底注 */}
+      <div className="rounded-[10px] border border-[rgba(255,196,94,0.28)] bg-[rgba(255,196,94,0.06)] px-3.5 py-3">
+        <div className="mb-1 flex items-baseline gap-2">
+          <h3 className="text-sm font-semibold text-[#ffd98a]">本期主结论</h3>
+          <span className="text-[11px] text-[var(--dim)]">
+            {data.main.kind}级事件
+          </span>
+        </div>
+        <p className="text-sm leading-relaxed text-[#eaf3ff]">
+          {data.main.conclusion}
+        </p>
+      </div>
+
+      {/* 示意图：黄道轮盘 */}
+      <svg
+        viewBox="0 0 320 320"
+        className="mx-auto mt-2 w-full max-w-[340px]"
+        role="img"
+        aria-label={`黄道轮盘：${data.bodies.map((b) => `${b.body.name}在${b.sign}宫`).join("、")}；金色高亮为下一笔入座的目标宫${data.nextIngress ? data.nextIngress.toSign : ""}宫`}
+      >
+        {hlPath ? <path d={hlPath} fill="rgba(255,196,94,0.10)" /> : null}
+        <circle cx={C} cy={C} r={R_OUT} fill="none" stroke="rgba(94,148,205,0.4)" strokeWidth={1} />
+        <circle cx={C} cy={C} r={R_IN} fill="none" stroke="rgba(94,148,205,0.28)" strokeWidth={1} />
+        {/* 宫界与 10° 小刻 */}
+        {Array.from({ length: 36 }, (_, k) => {
+          const major = k % 3 === 0;
+          const o = pt(k * 10, R_OUT);
+          const i = pt(k * 10, major ? R_IN : R_OUT - 6);
+          return (
+            <line
+              key={k}
+              x1={o.x}
+              y1={o.y}
+              x2={i.x}
+              y2={i.y}
+              stroke={major ? "rgba(147,169,201,0.65)" : "rgba(147,169,201,0.3)"}
+              strokeWidth={major ? 1.1 : 0.7}
+            />
+          );
+        })}
+        {/* 宫名 */}
+        {ZODIAC_SIGNS.map((s, k) => {
+          const p = pt(k * 30 + 15, (R_OUT + R_IN) / 2);
+          return (
+            <text
+              key={s}
+              x={p.x}
+              y={p.y}
+              fontSize={11}
+              fill={k === hlSignIdx ? "#ffd98a" : "#93a9c9"}
+              fontWeight={k === hlSignIdx ? 600 : 400}
+              textAnchor="middle"
+              dominantBaseline="middle"
+            >
+              {s}
+            </text>
+          );
+        })}
+        {/* 相位线（正在成相的对子；合相画环抱圈） */}
+        {data.aspects.map((a, i) => {
+          const pa = wheelById.get(a.aId);
+          const pb = wheelById.get(a.bId);
+          if (!pa || !pb) return null;
+          if (a.aspect === "合相") {
+            return (
+              <circle
+                key={i}
+                cx={(pa.x + pb.x) / 2}
+                cy={(pa.y + pb.y) / 2}
+                r={17}
+                fill="none"
+                stroke={a.color}
+                strokeWidth={1.1}
+                opacity={0.65}
+              />
+            );
+          }
+          return (
+            <line
+              key={i}
+              x1={pa.x}
+              y1={pa.y}
+              x2={pb.x}
+              y2={pb.y}
+              stroke={a.color}
+              strokeWidth={1.1}
+              opacity={0.45}
+            />
+          );
+        })}
+        {/* 八星落轮 */}
+        {wheelBodies.map((b) => (
+          <g key={b.body.id}>
+            <circle
+              cx={b.x}
+              cy={b.y}
+              r={10.5}
+              fill="#0b1526"
+              stroke={b.body.color}
+              strokeWidth={1.3}
+            />
+            <text
+              x={b.x}
+              y={b.y}
+              fontSize={10.5}
+              fill={b.body.color}
+              textAnchor="middle"
+              dominantBaseline="middle"
+            >
+              {b.body.glyph}
+            </text>
+            {b.retro ? (
+              <text
+                x={b.x + 11}
+                y={b.y - 8}
+                fontSize={8.5}
+                fill="#ff9c9c"
+                textAnchor="middle"
+              >
+                逆
+              </text>
+            ) : null}
+          </g>
+        ))}
+        <text x={C} y={C - 6} fontSize={10} fill="#7d90ad" textAnchor="middle">
+          黄道轮盘
+        </text>
+        <text x={C} y={C + 10} fontSize={9} fill="#7d90ad" textAnchor="middle">
+          地心 · 回归黄道
+        </text>
+      </svg>
+      <div className="mt-1 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[11px] text-[var(--dim)]">
+        {ASPECT_DEFS.map((d) => (
+          <span key={d.name} className="flex items-center gap-1">
+            <span
+              className="inline-block h-[3px] w-3.5 rounded"
+              style={{ background: d.color }}
+              aria-hidden
+            />
+            {d.name}
+          </span>
+        ))}
+        <span className="flex items-center gap-1">
+          <span className="inline-block h-2.5 w-2.5 rounded-[3px] bg-[rgba(255,196,94,0.35)]" aria-hidden />
+          下一入座宫
+        </span>
+      </div>
+
+      {/* 落轮读数 */}
+      <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 sm:grid-cols-4">
+        {data.bodies.map((b) => (
+          <div key={b.body.id} className="flex items-baseline gap-1.5 text-sm">
+            <span
+              className="inline-block h-2 w-2 shrink-0 translate-y-[-1px] rounded-full"
+              style={{ background: b.body.color }}
+              aria-hidden
+            />
+            <span className="font-medium text-[#eaf3ff]">{b.body.name}</span>
+            <span className="num text-xs text-[var(--dim)]">
+              {b.sign} {(b.lonDeg % 30).toFixed(1)}°
+              {b.retro ? " · 逆行" : ""}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {/* 入座 */}
+      <div className="mt-4 space-y-2 border-t border-[var(--border)] pt-3">
+        <div className="flex items-baseline justify-between gap-2">
+          <h3 className="text-sm font-semibold text-[#eaf3ff]">入座</h3>
+          <span className="text-[11px] text-[var(--dim)]">时刻为 JST</span>
+        </div>
+        <div className="space-y-2.5">
+          {data.pastIngress ? (
+            <IngressRow
+              tag="上一笔"
+              time={fmtDayTimeShort(data.pastIngress.time)}
+              ing={data.pastIngress}
+            />
+          ) : null}
+          {data.nextIngresses.map((ing, i) => (
+            <IngressRow
+              key={`${ing.planetId}-${ing.time.getTime()}`}
+              tag={i === 0 ? "下一笔" : ""}
+              time={fmtDayTimeShort(ing.time)}
+              ing={ing}
+            />
+          ))}
+        </div>
+      </div>
+
+      {/* 正在成相 */}
+      <div className="mt-4 space-y-2 border-t border-[var(--border)] pt-3">
+        <h3 className="text-sm font-semibold text-[#eaf3ff]">正在成相</h3>
+        {data.aspects.length > 0 ? (
+          <div className="space-y-2.5">
+            {data.aspects.map((a) => (
+              <div key={`${a.aId}-${a.bId}-${a.aspect}`}>
+                <div className="flex items-baseline justify-between gap-3 text-sm">
+                  <span className="font-medium text-[#eaf3ff]">
+                    {a.aName}
+                    <span style={{ color: a.color }}> {a.aspect} </span>
+                    {a.bName}
+                  </span>
+                  <span className="num shrink-0 text-xs text-[var(--dim)]">
+                    容许度 {a.orbDeg.toFixed(1)}°
+                  </span>
+                </div>
+                <p className="num mt-0.5 text-xs text-[var(--dim)]">
+                  精确 {fmtDayTimeShort(a.exactTime)} ·{" "}
+                  {a.applying ? "入相（渐近精确）" : "出相（渐离精确）"}
+                </p>
+                <p className="mt-0.5 text-xs leading-relaxed text-[#b9c9de]">
+                  {a.conclusion}
+                </p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-[var(--dim)]">
+            当前无主要相位落在容许度内。
+          </p>
+        )}
+      </div>
+
+      {/* 逆行站 */}
+      <div className="mt-4 space-y-2 border-t border-[var(--border)] pt-3">
+        <h3 className="text-sm font-semibold text-[#eaf3ff]">逆行</h3>
+        {data.retrogrades.length > 0 ? (
+          <div className="space-y-2.5">
+            {data.retrogrades.map((r) => (
+              <div key={r.planetId}>
+                <div className="flex items-baseline justify-between gap-3 text-sm">
+                  <span className="font-medium text-[#eaf3ff]">
+                    {r.planetName}逆行中
+                  </span>
+                  <span className="num shrink-0 text-xs text-[var(--dim)]">
+                    {r.start ? fmtDayTimeShort(r.start) : "—"} →{" "}
+                    {r.end ? fmtDayTimeShort(r.end) : "—"}
+                  </span>
+                </div>
+                <p className="mt-0.5 text-xs leading-relaxed text-[#b9c9de]">
+                  {r.conclusion}
+                </p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-[var(--dim)]">当前无行星逆行。</p>
+        )}
+      </div>
+
+      {/* 大周期 */}
+      <div className="mt-4 space-y-2 border-t border-[var(--border)] pt-3">
+        <h3 className="text-sm font-semibold text-[#eaf3ff]">
+          大周期 · 木土合相
+        </h3>
+        <dl className="space-y-1 text-sm">
+          <div className="flex justify-between gap-3">
+            <dt className="text-[var(--dim)]">上次合相</dt>
+            <dd className="num font-medium">
+              {data.cycle.lastConj
+                ? `${fmtDayTime(data.cycle.lastConj.time)} · ${data.cycle.lastConj.sign}宫`
+                : "—"}
+            </dd>
+          </div>
+          <div className="flex justify-between gap-3">
+            <dt className="text-[var(--dim)]">下次合相</dt>
+            <dd className="num font-medium">
+              {data.cycle.nextConj
+                ? `${fmtDayTime(data.cycle.nextConj.time)} · ${data.cycle.nextConj.sign}宫`
+                : "—"}
+            </dd>
+          </div>
+          <div className="flex justify-between gap-3">
+            <dt className="text-[var(--dim)]">当前阶段</dt>
+            <dd className="num font-medium">
+              {data.cycle.stageName} · 相位角 {data.cycle.phaseDeg.toFixed(0)}°
+            </dd>
+          </div>
+          <div className="flex justify-between gap-3">
+            <dt className="text-[var(--dim)]">土星–天王星</dt>
+            <dd className="num font-medium">
+              相位角 {data.cycle.satUranus.angleDeg.toFixed(0)}° ·{" "}
+              {data.cycle.satUranus.nearest}
+            </dd>
+          </div>
+          <div className="flex justify-between gap-3">
+            <dt className="text-[var(--dim)]">土星–冥王星</dt>
+            <dd className="num font-medium">
+              相位角 {data.cycle.satPluto.angleDeg.toFixed(0)}° ·{" "}
+              {data.cycle.satPluto.nearest}
+            </dd>
+          </div>
+        </dl>
+        <p className="text-xs leading-relaxed text-[#b9c9de]">
+          {data.cycle.conclusion}
+        </p>
+      </div>
+
+      <p className="mt-3 text-[11px] leading-relaxed text-[var(--dim)]">
+        本卡为占星传统的规则化解读（结论由固定规则表拼装：行星司掌
+        领域 × 星座领域 × 相位性质），非实证预测。星历口径：JPL
+        近似根数（Table 1）地心黄经、回归黄道，黄经已作岁差对齐当
+        日；相位容许度合/冲 ±8°、刑/拱 ±6°、六合 ±4°；时刻均为
+        JST。主结论选择规则：木土相位角距合/刑/冲节点 ≤8° 时取
+        周期级结论，否则取容许度最小的成相事件，再否则取下一笔
+        入座。月亮不入本卡（月相卡、今晚黄道卡已覆盖）。
+      </p>
+    </section>
+  );
+}
+
+function IngressRow({
+  tag,
+  time,
+  ing,
+}: {
+  tag: string;
+  time: string;
+  ing: MundaneAstroData["nextIngresses"][number];
+}) {
+  return (
+    <div>
+      <div className="flex items-baseline justify-between gap-3 text-sm">
+        <span className="font-medium text-[#eaf3ff]">
+          {tag ? (
+            <span className="mr-1.5 text-[11px] text-[var(--gold)]">{tag}</span>
+          ) : null}
+          {ing.planetName}
+          {ing.retro ? "逆行回" : "入"}
+          {ing.toSign}宫
+        </span>
+        <span className="num shrink-0 text-xs text-[var(--dim)]">{time}</span>
+      </div>
+      <p className="mt-0.5 text-xs leading-relaxed text-[#b9c9de]">
+        {ing.conclusion}
+      </p>
+    </div>
   );
 }
 
@@ -1799,6 +2331,46 @@ export function App() {
     el.addEventListener("touchmove", guard, { passive: false });
     return () => {
       el.removeEventListener("touchmove", guard);
+    };
+  }, [stageExpanded]);
+  // 展开浮层的视口锚定（板块下移核查·三轮，2026-11-15）：布局
+  // 坐标三态恒等早已证明（section 流内高恒 54svh、舞台进模式
+  // 只切 fixed 不进文档流、无钉身/无滚动操作），但真机仍报
+  // 模式下卡片渲染位置不对——剩余嫌疑在渲染层：应用壳在页面
+  // 滚动盒之外滚动页面时，position:fixed 的 inset-0 锚的是
+  // 布局视口原点，与可见视口（visualViewport）之间存在
+  // offsetTop/offsetLeft 偏移，浮层整体随之错位、底缘露出下
+  // 方卡片且看起来像卡片下移。本效应把展开浮层的盒子直接钉
+  // 到 visualViewport 的实时矩形（offset + 尺寸），并监听其
+  // resize/scroll 同步；普通浏览器里 offset 恒 0、尺寸恒等
+  // 于 inset-0，渲染不变。只动展开层自身的行内样式，退出即
+  // 清除，不碰文档流、不碰 body。
+  useEffect(() => {
+    if (!stageExpanded) return;
+    if (!window.matchMedia("(max-width: 1023.5px)").matches) return;
+    const el = stageRef.current;
+    const vv = window.visualViewport;
+    if (!el || !vv) return;
+    const sync = () => {
+      el.style.top = `${vv.offsetTop}px`;
+      el.style.left = `${vv.offsetLeft}px`;
+      el.style.width = `${vv.width}px`;
+      el.style.height = `${vv.height}px`;
+      el.style.right = "auto";
+      el.style.bottom = "auto";
+    };
+    sync();
+    vv.addEventListener("resize", sync);
+    vv.addEventListener("scroll", sync);
+    return () => {
+      vv.removeEventListener("resize", sync);
+      vv.removeEventListener("scroll", sync);
+      el.style.top = "";
+      el.style.left = "";
+      el.style.width = "";
+      el.style.height = "";
+      el.style.right = "";
+      el.style.bottom = "";
     };
   }, [stageExpanded]);
   // 进太阳系时收起星球菜单（底栏随之换成太阳系外壳，菜单不许在
@@ -2522,7 +3094,11 @@ export function App() {
               定标是世界单位公式（亮盘 0.80 口径与画布像素高
               无关），浮层改整屏高不改任何取景数值。桌面端
               （lg）本层恒 absolute inset-0 填满 h-screen
-              列，不展开。 */}
+              列，不展开。展开态盒子另由 visualViewport 实时
+              锚定（见上方同名效应）：应用壳在页面滚动盒之外
+              滚动时 fixed 的布局视口锚点会与可见视口错位，
+              浮层改钉可见视口矩形，渲染位置不再随壳滚动
+              漂移。 */}
           <div
             ref={stageRef}
             className={
@@ -2720,6 +3296,8 @@ export function App() {
               <p className="num mt-0.5 text-[11px] text-[var(--dim)]">
                 {BODY_INFO[focusedBody]!.facts}
               </p>
+              {/* 落宫双读数（日心结构 / 地心判断，见 BodySignReadings 注） */}
+              <BodySignReadings id={focusedBody} />
               {focusedBody === "earth" && (
                 <p className="mt-0.5 text-[11px] text-[var(--dim)]">
                   月球在绕地轨道内 · 盈亏由太阳光照决定
@@ -3028,6 +3606,9 @@ export function App() {
 
           {/* 今晚黄道：紧跟月相卡，同一套星历算下一个东京午夜的黄道实况 */}
           <EclipticTonightCard />
+
+          {/* 世事占星：紧跟今晚黄道卡，只做事件层（入座/成相/逆行/大周期）+ 规则表结论 */}
+          <MundaneAstrologyCard />
 
           {/* Cap 7：国家市值排名（按公司是哪国的来算；美国+加拿大、中国+台湾各合并一行） */}
           <BlockShell

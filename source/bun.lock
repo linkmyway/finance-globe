@@ -27,7 +27,7 @@
   "packages": {
     "@dimforge/rapier3d-compat": ["@dimforge/rapier3d-compat@0.12.0", "", {}, "sha512-uekIGetywIgopfD97oDL5PfeezkFpNhwlzlaEYNOA0N6ghdsOvh/HYjSMek5Q2O1PYvRSDFcqFVJl4r4ZBwOow=="],
 
-    "@hatch/space-sdk": ["@hatch/space-sdk@/opt/hatch/skills/spaces/ts-runtime/dist/space-sdk.tgz", { "dependencies": { "bun-plugin-tailwind": "0.0.15", "zod": "4.4.3" }, "peerDependencies": { "@libsql/client": "^0.14", "@tanstack/react-query": "^5", "drizzle-orm": "^0.45", "react": "^18 || ^19", "typescript": "^5" } }, "sha512-9O2fsgnlNF4By4EmroXmVe8RN5N/GrhDew6foOrw7NLNiAeljTxLW1gKqJyMPv9lfEv4Dy4JHKKi/NbWg+iGcg=="],
+    "@hatch/space-sdk": ["@hatch/space-sdk@/opt/hatch/skills/spaces/ts-runtime/dist/space-sdk.tgz", { "dependencies": { "bun-plugin-tailwind": "0.0.15", "zod": "4.4.3" }, "peerDependencies": { "@libsql/client": "^0.14", "@tanstack/react-query": "^5", "drizzle-orm": "^0.45", "react": "^18 || ^19", "typescript": "^5" } }, "sha512-JZU1G0pJpFKhpvhh1brgF9NQyowYmqWSS/dqlDhadzlQTsmTlgN65yBX++7iIksJpbwg5vMttD/yI12k83UNkQ=="],
 
     "@libsql/client": ["@libsql/client@0.14.0", "", { "dependencies": { "@libsql/core": "^0.14.0", "@libsql/hrana-client": "^0.7.0", "js-base64": "^3.7.5", "libsql": "^0.4.4", "promise-limit": "^2.7.0" } }, "sha512-/9HEKfn6fwXB5aTEEoMeFh4CtG0ZzbncBb1e++OCdVpgKZ/xyMsIVYXm0w7Pv4RUel803vE6LwniB3PqD72R0Q=="],
 

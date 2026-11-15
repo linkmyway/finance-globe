@@ -3,6 +3,7 @@
 // 八大行星开普勒轨道根数与黄道经度。全部无状态纯函数/常量。
 
 import * as THREE from "three";
+import { eclipticPrecessionDeg } from "./moonPhase";
 
 export const R = 1;
 
@@ -95,6 +96,12 @@ export const PLANET_ELEMENTS: Array<{
  * 行星当前黄道经度（弧度）：由轨道根数算平近点角 → 牛顿迭代解开普勒
  * 方程得真近点角 → 黄道经度。只取经度定方向，轨道半径用示意值——
  * 「相对位置可信、距离示意」正是页面的标注口径。
+ * 2026-11-15 全站统一口径（用户令：太阳系与黄道星座和现实对齐）：
+ * 返回值统一加黄经岁差 ψ(t)（moonPhase.eclipticPrecessionDeg，全站
+ * 单一共用函数），对齐当日回归黄道——与地心链（moonPhase 出口）、
+ * 宫环（Globe 黄道框组同 ψ 整体转）同口径；月亮 Meeus 公式本就是
+ * 当日口径、不加 ψ，本轮正是把行星迁到月亮的口径上。彗星（含星
+ * 街）不走本函数、不受影响。
  */
 export function planetLongitude(
   p: (typeof PLANET_ELEMENTS)[number],
@@ -118,5 +125,6 @@ export function planetLongitude(
   const yp = a * Math.sqrt(1 - e * e) * Math.sin(E);
   const nu = Math.atan2(yp, xp);
   // 黄道经度 = 真近点角 + 近日点黄经 ϖ（轨道倾角只影响黄纬，示意场景略）
-  return nu + pomega * rad;
+  // + 黄经岁差 ψ(t) 对齐当日回归黄道（见函数头注）
+  return nu + pomega * rad + eclipticPrecessionDeg(date) * rad;
 }
