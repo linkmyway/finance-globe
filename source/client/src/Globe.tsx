@@ -9913,21 +9913,29 @@ export function Globe({
      * 完整画面重描：两条带仍在结点断开直通（配对不
      * 变：band 0 = 左下↔右上、band 1 = 左上↔右下），
      * 但四臂各自独立定参（MOB_OPEN_ARMS）：角度互不
-     * 相等（左上 21°／右下 17° 一带浅、右上 40°／左
-     * 下 47° 一带陡，两带在结点处各带 4°／7° 折角、
-     * 不共线）、长度互不相等（左上 7.60 最长、右下
-     * 7.35 长尾、右上 6.55、左下 6.30）、波浪各异
-     * （左上滚浪、右上隆峰后卷落、左下近直微垂、右下
-     * 潜波长尾）。臂尖最大距心仍 = MOB_OPEN_A = 7.60
-     * （落点口径不变、帧边内侧）。带身：a = |t|、拉
-     * 伸坐标 sh = a^1.5（近结点波浪斜率归零、切向在
-     * 结点处恒为本臂基向）、法向（基向在带面内旋
-     * +90°）偏移 off = A1·sin(π·sh) + A2·sin(2π·sh)
-     * （sh = 1 时恒 0、臂尖落基向延长线上）。纵深：
-     * 0.38·off·(1−0.3a) ＋ 结点错层 ±0.17·exp(−(t/
-     * 0.22)²)——band 1 在结点前方（+0.17）掠过、
-     * band 0 在后方（−0.17），照参考图一前一后。臂
-     * 尖 y 归零（落回带面）。
+     * 相等、长度互不相等、波浪各异。臂尖最大距心仍
+     * = MOB_OPEN_A = 7.60（落点口径不变、帧边内
+     * 侧）。带身：a = |t|、拉伸坐标 sh = a^1.5（近结
+     * 点波浪斜率归零、切向在结点处恒为本臂基向）、
+     * 法向（基向在带面内旋 +90°）偏移 off = A1·sin
+     * (π·sh) + A2·sin(2π·sh)（sh = 1 时恒 0、臂尖落
+     * 基向延长线上）。纵深：0.38·off·(1−0.3a) ＋ 结
+     * 点错层 ±0.17·exp(−(t/0.22)²)——band 1 在结点
+     * 前方（+0.17）掠过、band 0 在后方（−0.17），照
+     * 参考图一前一后。臂尖 y 归零（落回带面）。
+     * 【舒展重塑轮 2026-11-19，元灿：「变形后的形状
+     * 也不好看」】X 不正轮的臂参（右上 40°／左下 47°
+     * 陡角、左下近直微垂）再作废：帧上读作窄陡刀片。
+     * 本轮照 5EF04FF5 构图重塑：四臂角度全压平缓
+     * （臂尖向 右上 27°／左下 218°／右下 −13°／左上
+     * 166°，交叉读法横向铺展优先）、每臂至少一个完
+     * 整起伏波（A1 主峰＋A2 全波谐波 |A2| ≥ 0.30，
+     * 不许直臂）、臂长差异保留（左上 7.60 最长、右
+     * 下 7.45 长尾、右上 6.90、左下 6.70）；波浪走向
+     * 照原图逐臂读：右上隆峰后卷落、左上滚浪、左下
+     * 宽 S 下摆、右下先潜后扬的长波。落框复算：四臂
+     * 尖距心 ≤ 7.60、波峰处合成半径 ≤ 旧态包络（账
+     * 见 DATA-PLAN 本轮条目），MOB_DOLLY_MAX 不动。
      */
     interface MobOpenArm {
       /** 基向（带面内单位向量 x/z 分量） */
@@ -9953,17 +9961,22 @@ export function Globe({
     // 落数）。角度口径 = 带的穿行方向（t 递增方向）自
     // +x 轴起、带面内量：正向臂的穿行方向即臂尖方向；
     // 负向臂穿行方向 = 臂尖方向 − 180°（臂尖落 −d·L
-    // 处）——四臂臂尖方向 = 右上 40°／左下 227°／右
-    // 下 −17°／左上 159°，互不等角
+    // 处）——舒展重塑轮（2026-11-19）四臂臂尖方向 =
+    // 右上 27°／左下 218°／右下 −13°／左上 166°，互
+    // 不等角、全压平缓（旧 40°/227°/−17°/159° 作废）
     const MOB_OPEN_ARMS = {
-      // band 0 正向 = 右上：臂尖 40° 陡上、隆峰后卷落
-      b0p: mobOpenArm(40, 6.55, 1.0, 0.35),
-      // band 0 负向 = 左下：臂尖 227° 陡下、近直微垂
-      b0n: mobOpenArm(47, 6.3, -0.38, -0.12),
-      // band 1 正向 = 右下：臂尖 17° 浅出、潜波长尾
-      b1p: mobOpenArm(-17, 7.35, -0.55, -0.14),
-      // band 1 负向 = 左上：臂尖 159° 浅上、最长、滚浪
-      b1n: mobOpenArm(-21, 7.6, 0.8, 0.3),
+      // band 0 正向 = 右上：臂尖 27° 平缓上扬、隆峰后
+      // 卷落（主峰 1.15＋全波 0.40）
+      b0p: mobOpenArm(27, 6.9, 1.15, 0.4),
+      // band 0 负向 = 左下：臂尖 218°、宽 S 下摆（主
+      // 峰 −0.85＋全波 −0.30，不再近直）
+      b0n: mobOpenArm(38, 6.7, -0.85, -0.3),
+      // band 1 正向 = 右下：臂尖 −13° 浅出、先潜后扬
+      // 的长波长尾（主峰 0.35＋全波 −0.85）
+      b1p: mobOpenArm(-13, 7.45, 0.35, -0.85),
+      // band 1 负向 = 左上：臂尖 166° 最浅、最长、滚
+      // 浪（主峰 1.00＋全波 0.38）
+      b1n: mobOpenArm(-14, 7.6, 1.0, 0.38),
     };
     const mobOpenBandPoint = (
       band: 0 | 1,
@@ -10002,12 +10015,13 @@ export function Globe({
      * 结点；取非零纯为避开 mobWaveDisp 的 |v|/hw 除
      * 零）；正描段沿臂收放（照 5EF04FF5 带宽读法）：
      * 结点端收细至 0.05（带在结点处断开、四臂各自收
-     * 进星芒）、tau ≈ 0.30 涨到本臂峰宽（中段膨大）、
-     * 末端 tau 0.78→1 羽化收尖至 ≈0.07（兼避回描折
-     * 返点的切向退化列）。四臂峰宽互不相等（右上
-     * 0.95／左下 0.90／左上 1.00／右下 0.92）、不镜
-     * 像。mobHalfW 以 (1 − m·(1 − 本因子)) 混入：
-     * m = 0 时恒 1、收拢态逐字不变。
+     * 进星芒）、tau ≈ 0.36 涨到本臂峰宽（中段膨大、
+     * 舒展重塑轮自 0.30 后移）、末端 tau 0.82→1 羽
+     * 化收尖至 ≈0.07（兼避回描折返点的切向退化
+     * 列）。四臂峰宽互不相等（右上 0.95／左下 0.90／
+     * 左上 1.00／右下 0.92）、不镜像。mobHalfW 以
+     * (1 − m·(1 − 本因子)) 混入：m = 0 时恒 1、收拢
+     * 态逐字不变。
      */
     const mobOpenPinch = (u: number): number => {
       const eighth = Math.floor(u / (Math.PI / 4)) % 8;
@@ -10025,11 +10039,14 @@ export function Globe({
             : eighth === 4
               ? 1.0
               : 0.92;
+      // 舒展重塑轮（2026-11-19）：膨大点随后移
+      // （0.30 → 0.36，宽窄收放跟长弧节奏缓起）、羽
+      // 化起点后移（0.78 → 0.82，尖收得更晚更细）
       const grow =
         0.05 +
-        (peak - 0.05) * THREE.MathUtils.smoothstep(tau, 0, 0.3);
+        (peak - 0.05) * THREE.MathUtils.smoothstep(tau, 0, 0.36);
       const tipT =
-        1 - 0.93 * THREE.MathUtils.smoothstep(tau, 0.78, 1);
+        1 - 0.93 * THREE.MathUtils.smoothstep(tau, 0.82, 1);
       return grow * tipT;
     };
     /** 全览镜头联动拉远上限（涨满轮 1.22 → 展开返工轮
@@ -10295,17 +10312,17 @@ export function Globe({
     // 扭带的流转，不另叠虹彩层）+ 星光颗粒（双层、密度
     // 上调）；背面 = 银白→粉紫渐变（粉紫加深）。
     // 【2026-11-16 重生成轮覆盖】上句色板作废：双面改按
-    // morph 在两套采样色之间插值——正面 环绕粉紫系（开
-    // 屏 9.0s）⇄ 展开深蓝系（慢放 11.5s），背面 环绕冰
-    // 青系 ⇄ 展开结点紫系（采样值见 fragment 内注）；流
-    // 动/星光颗粒/热芯/光丝机制不变。哪一面
-    // 朝外由半扭转几何决定：过星扣后两面互换从 ψ 的 π
-    // 扭转长出来，shader 不手动换色。带面中线一条白色热
-    // 芯（参考缎带的白炽芯线）、带缘向亮白提亮（与亮白
-    // 发光边缘线 + 光鞘同口径）；极细光丝 = v 向高频亮
-    // 度调制（只提亮不压暗）。uBandA = 整体不透明度
-    // （逐帧驱动，峰值 0.50×提亮系数——纠正轮口径，旧
-    // 0.16 压暗值已作废）
+    // morph 在采样色之间插值，流动/星光颗粒/热芯/光丝
+    // 机制不变。哪一面朝外由半扭转几何决定：过星扣后
+    // 两面互换从 ψ 的 π 扭转长出来，shader 不手动换
+    // 色。带面中线一条白色热芯（参考缎带的白炽芯
+    // 线）、带缘向亮白提亮（与亮白发光边缘线 + 光鞘同
+    // 口径）；极细光丝 = v 向高频亮度调制（只提亮不压
+    // 暗）。uBandA = 整体不透明度（逐帧驱动）
+    // 【2026-11-19 配色重做轮再覆盖】插值改三站分段
+    // （收拢 ⇄ 中途浓紫品红 ⇄ 展开，mobStage3），两
+    // 端色板整套重定（值见 fragment 内注）；uBandA 峰
+    // 值口径见帧段注（基值 0.64）
     const mobBandMat = new THREE.ShaderMaterial({
       transparent: true,
       depthWrite: false,
@@ -10338,64 +10355,100 @@ export function Globe({
         float mobHash(vec2 p) {
           return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
         }
-        // 色彩权威 = 四张原图文件直采（2026-11-16 原图重
-        // 采样轮，元灿：「色彩和参考图上的不像」——旧采样
-        // 表 #3446D3 等降为线索、不再作准，本轮逐值从
-        // ~/workspace/user/files 原图带面像素分布落数，
-        // 采样账见 DATA-PLAN 本轮条目）：展开（5EF04FF5
-        // 四臂＋C784DF3E 深部）主蓝 #3D4DEF／亮蓝
-        // #554FEF、深部 #222689；收拢（A3B47D08 粉紫缎
-        // 带＋7EE50D9C 紫粉股）粉紫 #8E6FA8→深紫
-        // #594699→粉 #C77BAE、暖弧橙 #D1703A
+        // 色彩权威 = 四张原图文件直采。【配色重做轮
+        // 2026-11-19，元灿：「变形前后的颜色都不好
+        // 看」】上一轮色板（#8E6FA8 等）本身取色偏
+        // 灰——源头色 S 仅 0.2 上下，管线再怎么拉饱和
+        // 也救不回通透：本轮两端＋中途段整套重定，逐
+        // 值自原图带面像素复采（采样账见 DATA-PLAN 本
+        // 轮条目：原图饱和明亮像素色相质量——收拢 =
+        // 紫蓝 230–260° 主峰＋青绿 170–200° 带段＋
+        // 橙金 0–20° 暖弧；展开 = 230–250° 压倒性集
+        // 中、带体 S 0.70–0.77）。收拢正面 = 深紫
+        // #50309E→亮蓝紫 #5A6CF2（7EE50D9C 蓝弧带体
+        // #586AEF/#6B7EF7 直采）→紫品红 #9A4FD8→品
+        // 红粉 #D657AC→珊瑚橙 #F08A4B→暖金 #F7C65C
+        // →粉 #C95FAE 的明艳流转；展开正面 = 深靛
+        // #232A8F（5EF04FF5 臂体 #312A8F/#2B32A5 直
+        // 采）→靛蓝 #2E3FD1→亮蓝 #3D55F5→蓝紫
+        // #6A5CF5。中途段（m≈0.5）独立第三套 = 浓紫
+        // 品红 #5B2EA6→#8A3FE0→#B44FD8→#7A4FE8：
+        // 变形混色经 mobStage3 分段走 粉→紫→蓝，不
+        // 许两端直 lerp 穿越灰脏中间色
         vec3 mobPalWrap(float x) {
-          vec3 col = mix(vec3(0.557, 0.435, 0.659), vec3(0.349, 0.275, 0.600), smoothstep(0.0, 0.30, x));
-          col = mix(col, vec3(0.780, 0.482, 0.682), smoothstep(0.30, 0.52, x));
-          col = mix(col, vec3(0.820, 0.439, 0.227), smoothstep(0.52, 0.68, x));
-          col = mix(col, vec3(0.525, 0.384, 0.612), smoothstep(0.68, 0.84, x));
-          return mix(col, vec3(0.557, 0.435, 0.659), smoothstep(0.84, 1.0, x));
+          vec3 col = mix(vec3(0.314, 0.188, 0.620), vec3(0.353, 0.424, 0.949), smoothstep(0.0, 0.20, x));
+          col = mix(col, vec3(0.604, 0.310, 0.847), smoothstep(0.20, 0.38, x));
+          col = mix(col, vec3(0.839, 0.341, 0.675), smoothstep(0.38, 0.54, x));
+          col = mix(col, vec3(0.941, 0.541, 0.294), smoothstep(0.54, 0.66, x));
+          col = mix(col, vec3(0.969, 0.776, 0.361), smoothstep(0.66, 0.74, x));
+          col = mix(col, vec3(0.788, 0.373, 0.682), smoothstep(0.74, 0.88, x));
+          return mix(col, vec3(0.314, 0.188, 0.620), smoothstep(0.88, 1.0, x));
+        }
+        vec3 mobPalMid(float x) {
+          vec3 col = mix(vec3(0.357, 0.180, 0.651), vec3(0.541, 0.247, 0.878), smoothstep(0.0, 0.32, x));
+          col = mix(col, vec3(0.706, 0.310, 0.847), smoothstep(0.32, 0.58, x));
+          col = mix(col, vec3(0.478, 0.310, 0.910), smoothstep(0.58, 0.82, x));
+          return mix(col, vec3(0.357, 0.180, 0.651), smoothstep(0.82, 1.0, x));
         }
         vec3 mobPalOpen(float x) {
-          vec3 col = mix(vec3(0.133, 0.149, 0.537), vec3(0.239, 0.302, 0.937), smoothstep(0.0, 0.45, x));
-          col = mix(col, vec3(0.333, 0.310, 0.937), smoothstep(0.45, 0.80, x));
-          return mix(col, vec3(0.133, 0.149, 0.537), smoothstep(0.80, 1.0, x));
+          vec3 col = mix(vec3(0.137, 0.165, 0.561), vec3(0.180, 0.247, 0.820), smoothstep(0.0, 0.32, x));
+          col = mix(col, vec3(0.239, 0.333, 0.961), smoothstep(0.32, 0.58, x));
+          col = mix(col, vec3(0.416, 0.361, 0.961), smoothstep(0.58, 0.82, x));
+          return mix(col, vec3(0.137, 0.165, 0.561), smoothstep(0.82, 1.0, x));
         }
-        // 背面：环绕 = 冰青（A3B47D08 青弧直采）#B9D9F2
-        // →#62C0F9；展开 = 结点紫系（5EF04FF5 结点＋
-        // C784DF3E 品紫直采）#5543E1→#7F5CFC→缘蓝
-        // #6468FC
+        // 背面：环绕 = 冰青系（A3B47D08 青绿带段直
+        // 采）#7FD0FA→#3FA9F5→青绿 #38C6C0→#60E0D8；
+        // 中途 = 蓝紫 #5A7CF5→#7A5CFC→#8F6DF9；展开
+        // = 结点薰衣草紫 #4A3AE0→#7A5CFC→#8F7DF8
+        // （5EF04FF5 结点薰衣草 #9D8DF6 的带体档）
         vec3 mobPalWrapB(float x) {
-          vec3 col = mix(vec3(0.725, 0.851, 0.949), vec3(0.384, 0.753, 0.976), smoothstep(0.10, 0.55, x));
-          col = mix(col, vec3(0.592, 0.820, 0.961), smoothstep(0.55, 0.90, x));
-          return mix(col, vec3(0.725, 0.851, 0.949), smoothstep(0.90, 1.0, x));
+          vec3 col = mix(vec3(0.498, 0.816, 0.980), vec3(0.247, 0.663, 0.961), smoothstep(0.08, 0.38, x));
+          col = mix(col, vec3(0.220, 0.776, 0.753), smoothstep(0.38, 0.62, x));
+          col = mix(col, vec3(0.376, 0.878, 0.847), smoothstep(0.62, 0.85, x));
+          return mix(col, vec3(0.498, 0.816, 0.980), smoothstep(0.85, 1.0, x));
+        }
+        vec3 mobPalMidB(float x) {
+          vec3 col = mix(vec3(0.353, 0.486, 0.961), vec3(0.478, 0.361, 0.988), smoothstep(0.08, 0.45, x));
+          col = mix(col, vec3(0.561, 0.427, 0.976), smoothstep(0.45, 0.80, x));
+          return mix(col, vec3(0.353, 0.486, 0.961), smoothstep(0.80, 1.0, x));
         }
         vec3 mobPalOpenB(float x) {
-          vec3 col = mix(vec3(0.333, 0.263, 0.882), vec3(0.498, 0.361, 0.988), smoothstep(0.10, 0.55, x));
-          col = mix(col, vec3(0.392, 0.408, 0.988), smoothstep(0.55, 0.90, x));
-          return mix(col, vec3(0.333, 0.263, 0.882), smoothstep(0.90, 1.0, x));
+          vec3 col = mix(vec3(0.290, 0.227, 0.878), vec3(0.478, 0.361, 0.988), smoothstep(0.08, 0.45, x));
+          col = mix(col, vec3(0.561, 0.490, 0.973), smoothstep(0.45, 0.80, x));
+          return mix(col, vec3(0.290, 0.227, 0.878), smoothstep(0.80, 1.0, x));
+        }
+        // 分段混色：m 前半 收拢→中途、后半 中途→展开
+        // （smoothstep 缓动），中途恒经浓紫品红站——
+        // 阶段感来源，禁止改回两端直 lerp
+        vec3 mobStage3(vec3 a, vec3 b, vec3 c, float m) {
+          return mix(mix(a, b, smoothstep(0.0, 0.5, m)), c, smoothstep(0.5, 1.0, m));
         }
         void main() {
           float s = vU * 0.15915494;
           float flow = fract(s - uTime * 0.03);
-          vec3 warm = mix(mobPalWrap(flow), mobPalOpen(flow), uMorph);
+          vec3 warm = mobStage3(mobPalWrap(flow), mobPalMid(flow), mobPalOpen(flow), uMorph);
           // 流光亮带：一道亮脉冲随渐变同向缓行（参考缎带
           // 上流动的高光段）。高光只许往本态色族里亮：收
-          // 拢 = 暖金奶油（A3B47D08 金弧芯直采 #F9E8D5
-          // 家族）、展开 = 蓝紫——等通道纯白叠加是带面在
-          // 帧里发白的洗色源，不许再用
-          warm += pow(0.5 + 0.5 * sin((flow) * 6.2831853 * 2.0), 3.0) * 0.26 * mix(vec3(1.0, 0.86, 0.66), vec3(0.45, 0.55, 1.0), uMorph);
+          // 拢 = 暖金、经品红站、展开 = 蓝紫（mobStage3
+          // 分段，不直 lerp 穿灰）——等通道纯白叠加是带
+          // 面在帧里发白的洗色源，不许再用
+          warm += pow(0.5 + 0.5 * sin((flow) * 6.2831853 * 2.0), 3.0) * 0.22 * mobStage3(vec3(1.0, 0.72, 0.42), vec3(0.98, 0.55, 0.85), vec3(0.55, 0.62, 1.0), uMorph);
           // 星尘闪点（开屏主图 A3B47D08 口径：密集、遍布
           // 带面）：两层点闪阈值两态同降（收拢态还原轮：
           // 元灿指收拢带面星尘密度明显不够——旧收拢阈值
           // 0.978/0.99 作废）、展开态再加一层细闪；四角
-          // 星形层见下方效果层 ③
+          // 星形层见下方效果层 ③。闪点色带本态微色（配
+          // 色重做轮：收拢暖粉白／展开薰衣草白）、不再
+          // 等通道纯白等量灌入（洗色源之二）
+          vec3 sparkTint = mix(vec3(1.0, 0.93, 0.97), vec3(0.87, 0.91, 1.0), uMorph);
           float sp = mobHash(floor(vec2(vU * 110.0, vV * 7.0)) + floor(uTime * 1.5) * 17.0);
-          warm += step(mix(0.955, 0.915, uMorph), sp) * 0.8;
+          warm += sparkTint * step(mix(0.955, 0.915, uMorph), sp) * 0.7;
           float sp2 = mobHash(floor(vec2(vU * 190.0, vV * 11.0)) + floor(uTime * 2.3) * 31.0);
-          warm += step(mix(0.972, 0.94, uMorph), sp2) * 0.5;
+          warm += sparkTint * step(mix(0.972, 0.94, uMorph), sp2) * 0.45;
           float sp3 = mobHash(floor(vec2(vU * 260.0, vV * 15.0)) + floor(uTime * 3.1) * 47.0);
-          warm += step(0.965, sp3) * 0.45 * uMorph;
+          warm += sparkTint * step(0.965, sp3) * 0.4 * uMorph;
           float bs = fract(s + 0.35);
-          vec3 cool = mix(mobPalWrapB(bs), mobPalOpenB(bs), uMorph);
+          vec3 cool = mobStage3(mobPalWrapB(bs), mobPalMidB(bs), mobPalOpenB(bs), uMorph);
           cool += step(0.988, mobHash(floor(vec2(vU * 90.0, vV * 6.0)))) * 0.4;
           vec3 col = gl_FrontFacing ? warm : cool;
           // 结点紫晕：交叉相位（s = 0.25 / 0.75）附近向结
@@ -10403,37 +10456,39 @@ export function Globe({
           // 开态更显
           float knot = exp(-pow((s - 0.25) / 0.045, 2.0)) + exp(-pow((s - 0.75) / 0.045, 2.0));
           col = mix(col, vec3(0.333, 0.263, 0.882), knot * 0.38 * (0.25 + 0.75 * uMorph));
-          // 饱和定版（原图重采样轮，元灿：「变形前后的色
-          // 彩还需要加强，不够鲜艳」）：败点不在采样值而
-          // 在落地——半透混合＋等通道叠加把饱和洗淡，按
-          // 管线故障修：带面基色在此做饱和 ×1.30 定版拉
-          // 回原图分布（色相不动）；其后的白炽芯线/星尘/
-          // 光涌等近白叠加不受影响、保持近白（参考图本
-          // 就如此），不整体过曝
+          // 饱和定版（配色重做轮改口径）：上一轮 ×1.30
+          // 是拿管线硬拉一张灰色板——本轮源头色已回到
+          // 原图饱和分布（S 0.6–0.78），此处只补半透混
+          // 合的落地损耗 ×1.18（色相不动、不推过曝）；
+          // 其后的芯线/星尘/光涌等近白叠加不受影响、保
+          // 持近白（参考图本就如此）
           float mobLum = dot(col, vec3(0.299, 0.587, 0.114));
-          col = clamp(mix(vec3(mobLum), col, 1.30), 0.0, 1.0);
+          col = clamp(mix(vec3(mobLum), col, 1.18), 0.0, 1.0);
           // 周期光脉冲（特效增密轮）：一道光涌沿 ∞ 缓行
           // （uPulseU 由帧段以 22 秒/圈推进）——常驻光流
-          // 动的起伏，两面同加、白粉色，与流光同向同源
+          // 动的起伏，两面同加，与流光同向同源
           float pd = abs(vU - uPulseU);
           pd = min(pd, 6.2831853 - pd);
           float surge = exp(-pow(pd / 0.55, 2.0)) * uPulseA;
-          // 光涌色随 morph 走原图色族：环绕粉白 → 展开品
-          // 紫（C784DF3E 迸开品紫直采 #7F5CFC），展开态
-          // 量同步收一档——旧白光涌是发白主源之一
-          col += mix(vec3(0.98, 0.87, 0.93), vec3(0.498, 0.361, 0.988), uMorph) * surge * mix(0.38, 0.22, uMorph);
+          // 光涌色随 morph 分段走原图色族：环绕粉白 →
+          // 品红站 → 展开品紫 #7F5CFC，展开态量同步收
+          // 一档——旧白光涌是发白主源之一
+          col += mobStage3(vec3(0.98, 0.87, 0.93), vec3(0.85, 0.55, 0.97), vec3(0.498, 0.361, 0.988), uMorph) * surge * mix(0.38, 0.22, uMorph);
           float fil = 0.88 + 0.35 * pow(0.5 + 0.5 * sin(vV * 34.0), 10.0);
           col *= fil;
           // 白炽核心线：带面中线一条（辉光结构定版：白炽
           // 核心线＋宽幅柔光晕）——展开态收窄成细线（高斯
-          // σ 减半）：细线读作辉光、宽芯读作洗色
+          // σ 减半）：细线读作辉光、宽芯读作洗色。芯色
+          // 带本态微色（配色重做轮）：收拢暖白／展开薰
+          // 衣草白（5EF04FF5 芯线读法），不纯白灌入
           float core = exp(-pow(vV * mix(1.7, 3.4, uMorph), 2.0));
-          col += vec3(1.0) * core * mix(0.38, 0.30, uMorph);
+          col += mix(vec3(1.0, 0.94, 0.90), vec3(0.83, 0.87, 1.0), uMorph) * core * mix(0.38, 0.30, uMorph);
           // 带缘向原图带缘色提亮、不掺白（掺白混色是发白
-          // 主源之三）：环绕 = 粉白 #DEC2DC、展开 = 缘蓝
-          // #6468FC（5EF04FF5 缘部直采）
+          // 主源之三）：环绕 = 亮粉 #F0B8DC（旧灰粉
+          // #DEC2DC 作废）、经紫站、展开 = 缘蓝 #6468FC
+          // （5EF04FF5 缘部直采）
           float edge = smoothstep(0.62, 1.0, abs(vV));
-          col = mix(col, mix(vec3(0.87, 0.76, 0.86), vec3(0.392, 0.408, 0.988), uMorph), edge * mix(0.65, 0.55, uMorph));
+          col = mix(col, mobStage3(vec3(0.941, 0.722, 0.863), vec3(0.78, 0.55, 0.97), vec3(0.392, 0.408, 0.988), uMorph), edge * mix(0.65, 0.55, uMorph));
           // —— 带面效果层（2026-11-16 收拢态还原轮，元灿：
           // 「变形前环上有很多效果和线，你要还原出来」；
           // 照 A3B47D08 / 7EE50D9C 带面细读逐项还原）。
@@ -10539,9 +10594,10 @@ export function Globe({
           float w = d > 0.0 ? 0.16 : 0.62;
           float g = exp(-pow(d / w, 2.0));
           // 流动光色随 morph 在原图直采色之间走：环绕粉
-          // #F2C4DC → 展开芯线浅蓝 #C4D4FF（5EF04FF5 芯
-          // 线直采）
-          vec3 col = mix(vec3(0.949, 0.769, 0.863), vec3(0.769, 0.831, 1.0), uMorph);
+          // #F5AED6（配色重做轮：旧 #F2C4DC 偏灰粉、加
+          // 深一档）→ 展开芯线浅蓝 #C4D4FF（5EF04FF5
+          // 芯线直采）
+          vec3 col = mix(vec3(0.961, 0.678, 0.839), vec3(0.769, 0.831, 1.0), uMorph);
           gl_FragColor = vec4(col, g * 0.6 * uWaveA);
         }`,
     });
@@ -10730,7 +10786,7 @@ export function Globe({
     const mobEdgeSheathMat = new THREE.ShaderMaterial({
       uniforms: {
         uFade: { value: 0 },
-        uTint: { value: new THREE.Color(0xd9b8d2) },
+        uTint: { value: new THREE.Color(0xe79bd2) },
       },
       vertexShader: [
         "attribute float aA;",
@@ -10983,10 +11039,10 @@ export function Globe({
       const pos: number[] = [];
       const col: number[] = [];
       const palette = [
-        new THREE.Color(0x7c8ffb),
+        new THREE.Color(0x5f74f7),
         new THREE.Color(0x7f5cfc),
         new THREE.Color(0xffffff),
-        new THREE.Color(0xc77bae),
+        new THREE.Color(0xd657ac),
       ];
       for (let i = 0; i < 30; i++) {
         const th = Math.random() * Math.PI * 2;
@@ -11026,13 +11082,13 @@ export function Globe({
       const tailDefs = [
         {
           dir: -0.55,
-          colRoot: new THREE.Color(0xb45a96),
-          colTip: new THREE.Color(0xc77bae),
+          colRoot: new THREE.Color(0xc23a8e),
+          colTip: new THREE.Color(0xd657ac),
         },
         {
           dir: 0.62,
           colRoot: new THREE.Color(0x62c0f9),
-          colTip: new THREE.Color(0x97d1f5),
+          colTip: new THREE.Color(0x6fc4f8),
         },
       ];
       for (const td of tailDefs) {
@@ -11229,8 +11285,8 @@ export function Globe({
     {
       const tmp = new THREE.Vector3();
       const palette = [
-        new THREE.Color(0xc77bae),
-        new THREE.Color(0x7c8ffb),
+        new THREE.Color(0xd657ac),
+        new THREE.Color(0x5f74f7),
         new THREE.Color(0xffffff),
         new THREE.Color(0x62c0f9),
       ];
@@ -11411,25 +11467,31 @@ export function Globe({
         uniform float uMorph;
         varying float vU;
         varying float vV;
-        // 光场色与带面同源（原图直采色中段）：正面 环绕
-        // 粉紫 #9A76B4 → 展开蓝 #3D4DEF；背面 环绕冰青
-        // #97D1F5 → 展开结点紫 #5543E1，随 morph 插值
+        // 光场色与带面同源（配色重做轮 2026-11-19 随
+        // 带面成套重定）：正面分段走 环绕品红紫
+        // #B057C8 → 中途浓紫 #8A3FE0 → 展开亮蓝
+        // #3D55F5；背面 环绕冰青 #4FB2F7 → 中途
+        // #7A5CFC → 展开结点紫 #4A3AE0（mobStage3 同
+        // 口径在本地复刻一份）
+        vec3 mobStage3H(vec3 a, vec3 b, vec3 c, float m) {
+          return mix(mix(a, b, smoothstep(0.0, 0.5, m)), c, smoothstep(0.5, 1.0, m));
+        }
         vec3 mobWarmH(float x) {
-          vec3 col = mix(vec3(0.604, 0.463, 0.706), vec3(0.239, 0.302, 0.937), uMorph);
-          // 粉白脉冲掺入随 morph 收掉四分之三：光场在展开
+          vec3 col = mobStage3H(vec3(0.690, 0.341, 0.784), vec3(0.541, 0.247, 0.878), vec3(0.239, 0.333, 0.961), uMorph);
+          // 粉亮脉冲掺入随 morph 收掉四分之三：光场在展开
           // 态须留在蓝紫家族、不许把带面罩成白纱
-          return mix(col, vec3(0.851, 0.722, 0.824), pow(0.5 + 0.5 * sin(x * 6.2831853 * 2.0), 3.0) * 0.25 * (1.0 - 0.75 * uMorph));
+          return mix(col, vec3(0.910, 0.560, 0.780), pow(0.5 + 0.5 * sin(x * 6.2831853 * 2.0), 3.0) * 0.25 * (1.0 - 0.75 * uMorph));
         }
         void main() {
           float s = vU * 0.15915494;
           float flow = fract(s - uTime * 0.03);
           vec3 warm = mobWarmH(flow);
-          vec3 cool = mix(vec3(0.592, 0.820, 0.961), vec3(0.333, 0.263, 0.882), uMorph);
+          vec3 cool = mobStage3H(vec3(0.310, 0.698, 0.968), vec3(0.478, 0.361, 0.988), vec3(0.290, 0.227, 0.878), uMorph);
           vec3 col = gl_FrontFacing ? warm : cool;
-          // 饱和定版（与带面同口径 ×1.20）：加色混合最易
+          // 饱和定版（与带面同口径 ×1.15）：加色混合最易
           // 洗淡，光场基色先拉回原图饱和分布再输出
           float hLum = dot(col, vec3(0.299, 0.587, 0.114));
-          col = clamp(mix(vec3(hLum), col, 1.20), 0.0, 1.0);
+          col = clamp(mix(vec3(hLum), col, 1.15), 0.0, 1.0);
           // vV 以带缘为 ±1 归一（几何 v ±1.35、带半宽
           // 0.2 → vV = v/0.2，带缘外即 |vV|>1）：带面平台
           // 0.13、向外高斯缓漫（柔焦扩散、无硬边）
@@ -11525,11 +11587,13 @@ export function Globe({
         n: new THREE.Vector3(),
       };
       const cols = new Float32Array(MOB_SPARK_N * 3);
+      // 星尘色板（配色重做轮 2026-11-19 加深：旧粉紫
+      // 两档偏灰）——白／浓粉／亮蓝／浓紫
       const palette: Array<[number, number, number]> = [
         [1, 1, 1],
-        [0.855, 0.706, 0.843],
-        [0.643, 0.776, 0.992],
-        [0.8, 0.616, 0.8],
+        [0.92, 0.55, 0.8],
+        [0.45, 0.65, 1.0],
+        [0.72, 0.45, 0.95],
       ];
       for (let i = 0; i < MOB_SPARK_N; i++) {
         const u = Math.random() * Math.PI * 2;
@@ -11641,13 +11705,13 @@ export function Globe({
     const MOB_GLASS_N = 16;
     const mobGlassMats = [
       new THREE.MeshBasicMaterial({
-        color: 0x7c8ffb,
+        color: 0x5f74f7,
         transparent: true,
         opacity: 0,
         depthWrite: false,
       }),
       new THREE.MeshBasicMaterial({
-        color: 0xc77bae,
+        color: 0xd657ac,
         transparent: true,
         opacity: 0,
         depthWrite: false,
@@ -11699,7 +11763,7 @@ export function Globe({
     const mobShardGeo = new THREE.OctahedronGeometry(0.045);
     const mobShardMats = [
       new THREE.MeshBasicMaterial({
-        color: 0xb45a96,
+        color: 0xc23a8e,
         transparent: true,
         opacity: 0,
         depthWrite: false,
@@ -11865,8 +11929,13 @@ export function Globe({
     let mobBuiltWave = -1;
     // 边缘色调两端（原图直采）：环绕粉 #D9B8D2 → 展开
     // 缘蓝 #7C8FFB
-    const mobTintWrapC = new THREE.Color(0xd9b8d2);
-    const mobTintOpenC = new THREE.Color(0x7c8ffb);
+    // 边缘线/光鞘色调三站（配色重做轮 2026-11-19）：
+    // 环绕亮粉 #E79BD2 → 中途浓紫 #9A5CF5 → 展开蓝
+    // #6E86FF，帧段分段插值（不直 lerp 穿灰）；旧灰粉
+    // #D9B8D2 作废
+    const mobTintWrapC = new THREE.Color(0xe79bd2);
+    const mobTintMidC = new THREE.Color(0x9a5cf5);
+    const mobTintOpenC = new THREE.Color(0x6e86ff);
     // 常驻流动光无点选状态（更正轮）：相位由帧段会话时钟
     // 直推（mobWaveMat.uFlowU），旧点选涟漪的进度/方向/原
     // 点/命中相位状态整套退役——点带只剩弹卡与迸散
@@ -17673,20 +17742,31 @@ export function Globe({
             mobBandMat.uniforms.uMorph!.value = mobMorphM;
             mobHaloMat.uniforms.uMorph!.value = mobMorphM;
             mobWaveMat.uniforms.uMorph!.value = mobMorphM;
-            mobEdgeMat.color.lerpColors(
-              mobTintWrapC,
-              mobTintOpenC,
-              mobMorphM,
-            );
-            mobEdgeGlowMat.color.lerpColors(
-              mobTintWrapC,
-              mobTintOpenC,
-              mobMorphM,
-            );
-            (
+            // 色调分段插值（配色重做轮）：m 前半 环绕→中
+            // 途浓紫、后半 中途→展开，与带面 mobStage3 同
+            // 口径——边缘线/辉光线/光鞘三处同走
+            const mobTintStage = (
+              c: THREE.Color,
+            ): void => {
+              if (mobMorphM < 0.5)
+                c.lerpColors(
+                  mobTintWrapC,
+                  mobTintMidC,
+                  mobMorphM * 2,
+                );
+              else
+                c.lerpColors(
+                  mobTintMidC,
+                  mobTintOpenC,
+                  mobMorphM * 2 - 1,
+                );
+            };
+            mobTintStage(mobEdgeMat.color);
+            mobTintStage(mobEdgeGlowMat.color);
+            mobTintStage(
               mobEdgeSheathMat.uniforms.uTint!
-                .value as THREE.Color
-            ).lerpColors(mobTintWrapC, mobTintOpenC, mobMorphM);
+                .value as THREE.Color,
+            );
             // 高亮点击触发（2026-11-16 元灿令「莫比乌斯环
             // 的高亮可以改成点击后」，恢复最初「点选提亮、
             // 关闭还原」机制）：mobSelK 向 mobiusSelected 趋
@@ -17705,18 +17785,18 @@ export function Globe({
             if (Math.abs((mobiusSelected ? 1 : 0) - mobSelK) < 0.003)
               mobSelK = mobiusSelected ? 1 : 0;
             const bright = 1 + 0.85 * mobSelK;
-            // 带面峰值不透明度 0.58（原图重采样轮：浓度是
-            // 饱和落地的一半——半透下带色与深空底色对半混
-            // 合必然洗淡，基值自 0.50 抬到 0.58、与着色器
-            // 饱和定版 ×1.30 配套）×提亮（常态 1.0 / 点选
-            // 1.35）×展开体量系数 (1 + 0.35m)：展开停留段
-            // 峰值 0.58 → 0.78——带面要有体量、不许透成白
-            // 纱（帧里像素色相/饱和须对回原图分布）；m = 0
-            // 时体量系数恒 1
+            // 带面峰值不透明度 0.64（配色重做轮 2026-11
+            // -19：浓度是饱和落地的一半——半透下带色与深
+            // 空底色混合必然洗淡，基值自 0.58 再抬到
+            // 0.64、与新色板＋着色器饱和定版 ×1.18 配套）
+            // ×提亮（常态 1.0 / 点选 1.35）×展开体量系数
+            // (1 + 0.30m)：展开停留段峰值 0.64 → 0.83——
+            // 带面要有体量、不许透成白纱（帧里像素色相/
+            // 饱和须对回原图分布）；m = 0 时体量系数恒 1
             mobBandMat.uniforms.uBandA!.value =
-              0.58 *
+              0.64 *
               mobVis *
-              (1 + 0.35 * mobMorphM) *
+              (1 + 0.3 * mobMorphM) *
               (1 + 0.35 * mobSelK);
             mobBandMat.uniforms.uTime!.value = reducedMotion
               ? 0

@@ -505,6 +505,44 @@ function Spark({
   );
 }
 
+// ---------------------------------------------------------------------------
+// 全站卡片规格（统一一套，2026-11-19 分组整理轮定版）：外层卡片统一
+// 内边距与圆角（.glass 提供圆角 var(--radius)）、标题统一字号字重、
+// 右上角徽章统一规格、卡内分隔线统一走 var(--border)、卡间距由
+// main 的 space-y-4 单一节奏控制。新增卡片一律引用这组常量，不
+// 再各自手写一套数值。
+// ---------------------------------------------------------------------------
+const CARD_CLASS = "glass p-4 sm:p-5";
+const CARD_TITLE_CLASS =
+  "font-display text-lg font-semibold tracking-wide text-[#eaf3ff]";
+const CARD_BADGE_CLASS =
+  "rounded border border-[var(--border)] px-1.5 py-0.5 text-[11px] whitespace-nowrap text-[var(--dim)]";
+const FOLD_LABEL_CLASS = "text-[11px] whitespace-nowrap text-[var(--dim)]";
+
+/**
+ * 组标题（克制款：小字标签 + 说明 + 细分隔线，不做成卡片）。
+ * 天文组在前、市场组在后；组内顺序与分组前逐项一致，不作任何
+ * 其他调动。地球仪与行情条在页首、不入组；页脚殿后。
+ */
+function GroupHeader({ label, note }: { label: string; note: string }) {
+  return (
+    <div
+      className="flex items-center gap-3 px-1 pt-1"
+      role="heading"
+      aria-level={2}
+      aria-label={`${label}组：${note}`}
+    >
+      <span className="text-xs font-semibold tracking-[0.3em] text-[#a9c3e2]">
+        {label}
+      </span>
+      <span className={FOLD_LABEL_CLASS}>
+        {note}
+      </span>
+      <span className="h-px flex-1 bg-[var(--border)]" aria-hidden="true" />
+    </div>
+  );
+}
+
 function BlockShell({
   title,
   block,
@@ -523,12 +561,12 @@ function BlockShell({
   hideSourceLine?: boolean;
 }) {
   return (
-    <section className="glass p-4 sm:p-5" aria-label={title}>
+    <section className={CARD_CLASS} aria-label={title}>
       <div className="mb-3 flex items-baseline justify-between gap-2">
-        <h2 className="font-display text-lg font-semibold tracking-wide text-[#eaf3ff]">
+        <h2 className={CARD_TITLE_CLASS}>
           {title}
         </h2>
-        <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[11px] text-[var(--dim)]">
+        <span className={CARD_BADGE_CLASS}>
           {freq}
         </span>
       </div>
@@ -676,6 +714,10 @@ function EclipseRow({
  */
 function MoonPhaseCard() {
   const [now, setNow] = useState(() => new Date());
+  // 月食段默认折叠（2026-11-19 分组整理轮）：月相、潮汐保持直显，
+  // 月食与租金、海缆同规格折叠——同一箭头＋文案、同一展开动效；
+  // 折叠只是收起，内容一字不删。
+  const [eclipseOpen, setEclipseOpen] = useState(false);
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 60000);
     return () => clearInterval(id);
@@ -709,12 +751,12 @@ function MoonPhaseCard() {
       day: "numeric",
     }).format(d);
   return (
-    <section className="glass p-4 sm:p-5" aria-label="月相">
+    <section className={CARD_CLASS} aria-label="月相">
       <div className="mb-3 flex items-baseline justify-between gap-2">
-        <h2 className="font-display text-lg font-semibold tracking-wide text-[#eaf3ff]">
+        <h2 className={CARD_TITLE_CLASS}>
           月相
         </h2>
-        <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[11px] text-[var(--dim)]">
+        <span className={CARD_BADGE_CLASS}>
           实时计算
         </span>
       </div>
@@ -802,24 +844,46 @@ function MoonPhaseCard() {
         </dl>
       </div>
       {ecl ? (
-        <div className="mt-4 space-y-2 border-t border-[var(--border)] pt-3">
-          <div className="flex items-baseline justify-between gap-2">
+        <div className="mt-4 border-t border-[var(--border)] pt-3">
+          <button
+            type="button"
+            onClick={() => setEclipseOpen((v) => !v)}
+            aria-expanded={eclipseOpen}
+            aria-label={eclipseOpen ? "收起月食" : "展开月食"}
+            className="flex w-full items-baseline justify-between gap-2 text-left"
+          >
             <h3 className="text-sm font-semibold text-[#eaf3ff]">月食</h3>
-            <span className="text-[11px] text-[var(--dim)]">
-              时刻为日本时间
+            <span className="flex shrink-0 items-baseline gap-2">
+              <span className="text-[11px] text-[var(--dim)]">
+                时刻为日本时间
+              </span>
+              <span className={FOLD_LABEL_CLASS}>
+                {eclipseOpen ? "收起 ∧" : "展开 ∨"}
+              </span>
             </span>
-          </div>
-          <div className="space-y-2.5 text-sm">
-            <EclipseRow caption="下一次月食" v={ecl.next} />
-            {ecl.nextVisibleInTokyo ? (
-              <EclipseRow caption="东京可见 · 下一次" v={ecl.nextVisibleInTokyo} />
-            ) : null}
-            {ecl.nextVisibleTotalInTokyo ? (
-              <EclipseRow
-                caption="东京可见 · 下一次皆既"
-                v={ecl.nextVisibleTotalInTokyo}
-              />
-            ) : null}
+          </button>
+          <div
+            aria-hidden={!eclipseOpen}
+            className={`grid transition-all duration-300 ease-out ${
+              eclipseOpen
+                ? "mt-2 grid-rows-[1fr] opacity-100"
+                : "grid-rows-[0fr] opacity-0"
+            }`}
+          >
+            <div className="min-h-0 overflow-hidden">
+              <div className="space-y-2.5 text-sm">
+                <EclipseRow caption="下一次月食" v={ecl.next} />
+                {ecl.nextVisibleInTokyo ? (
+                  <EclipseRow caption="东京可见 · 下一次" v={ecl.nextVisibleInTokyo} />
+                ) : null}
+                {ecl.nextVisibleTotalInTokyo ? (
+                  <EclipseRow
+                    caption="东京可见 · 下一次皆既"
+                    v={ecl.nextVisibleTotalInTokyo}
+                  />
+                ) : null}
+              </div>
+            </div>
           </div>
         </div>
       ) : null}
@@ -1009,12 +1073,12 @@ function EclipticTonightCard() {
     }).format(d);
 
   return (
-    <section className="glass p-4 sm:p-5" aria-label="今晚黄道">
-      <div className="mb-1 flex items-baseline justify-between gap-2">
-        <h2 className="font-display text-lg font-semibold tracking-wide text-[#eaf3ff]">
+    <section className={CARD_CLASS} aria-label="今晚黄道">
+      <div className="mb-3 flex items-baseline justify-between gap-2">
+        <h2 className={CARD_TITLE_CLASS}>
           今晚黄道
         </h2>
-        <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[11px] text-[var(--dim)]">
+        <span className={CARD_BADGE_CLASS}>
           {fmtDay(target)} 0:00 · 东京
         </span>
       </div>
@@ -1264,12 +1328,12 @@ function MundaneAstrologyCard() {
   })();
 
   return (
-    <section className="glass p-4 sm:p-5" aria-label="世事占星">
-      <div className="mb-1 flex items-baseline justify-between gap-2">
-        <h2 className="font-display text-lg font-semibold tracking-wide text-[#eaf3ff]">
+    <section className={CARD_CLASS} aria-label="世事占星">
+      <div className="mb-3 flex items-baseline justify-between gap-2">
+        <h2 className={CARD_TITLE_CLASS}>
           世事占星
         </h2>
-        <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[11px] text-[var(--dim)]">
+        <span className={CARD_BADGE_CLASS}>
           {fmtDayTimeShort(data.computedAt)} · 东京
         </span>
       </div>
@@ -2976,7 +3040,7 @@ export function App() {
           <p className="text-sm text-[var(--dim)]">数据加载中…</p>
         )}
         {rents.length > 0 && (
-          <div className="mt-2 border-t border-[rgba(94,148,205,0.14)] pt-2">
+          <div className="mt-2 border-t border-[var(--border)] pt-2">
             {rents.map((r) => (
               <p key={r.key} className="py-0.5 text-xs text-[var(--dim)]">
                 {RENT_CITY[r.key]?.city}房租：
@@ -3587,7 +3651,7 @@ export function App() {
           )}
 
           {dash.isError && !data && (
-            <section className="glass p-5" aria-label="加载失败">
+            <section className={CARD_CLASS} aria-label="加载失败">
               <p className="text-sm text-[#ff9c9c]">
                 数据加载失败，可能是数据源暂时不可用。
               </p>
@@ -3601,6 +3665,9 @@ export function App() {
             </section>
           )}
 
+          {/* 天文组（组内顺序不动：月相 → 今晚黄道 → 世事占星） */}
+          <GroupHeader label="天文" note="月相 · 黄道 · 占星" />
+
           {/* 月相：天文算法实时计算，与太阳系 3D 月球同源 */}
           <MoonPhaseCard />
 
@@ -3609,6 +3676,9 @@ export function App() {
 
           {/* 世事占星：紧跟今晚黄道卡，只做事件层（入座/成相/逆行/大周期）+ 规则表结论 */}
           <MundaneAstrologyCard />
+
+          {/* 市场组（组内顺序不动：Cap 7 → Mag7 → M2 → 汇率·利率 → 租金 → 市场波动 → 海底光缆） */}
+          <GroupHeader label="市场" note="市值 · 货币 · 汇率 · 波动" />
 
           {/* Cap 7：国家市值排名（按公司是哪国的来算；美国+加拿大、中国+台湾各合并一行） */}
           <BlockShell
@@ -3706,7 +3776,7 @@ export function App() {
                   )}
               </div>
             </div>
-            <ul className="divide-y divide-[rgba(94,148,205,0.12)]">
+            <ul className="divide-y divide-[var(--border)]">
               {countryCapRows.map((r) => (
                 <li key={r.code} className="py-2">
                   <div className="flex items-center gap-3">
@@ -3945,7 +4015,7 @@ export function App() {
                 </div>
               )}
             </div>
-            <ul className="divide-y divide-[rgba(94,148,205,0.12)]">
+            <ul className="divide-y divide-[var(--border)]">
               {mag7Rows.map((r, i) => (
                 <li key={r.symbol} className="py-2">
                   <div className="flex items-center gap-3">
@@ -4165,7 +4235,7 @@ export function App() {
                 </div>
               ))}
             </div>
-            <div className="mt-4 space-y-2 border-t border-[rgba(94,148,205,0.14)] pt-3">
+            <div className="mt-4 space-y-2 border-t border-[var(--border)] pt-3">
               <div className="flex items-baseline justify-between text-sm">
                 <span className="text-[var(--dim)]">
                   美国 · 联邦基金有效利率
@@ -4222,7 +4292,7 @@ export function App() {
           </BlockShell>
 
           {/* 房租：默认折叠（与海缆卡同规格），摘要放东京、上海 */}
-          <section className="glass p-4 sm:p-5" aria-label="核心城市房租">
+          <section className={CARD_CLASS} aria-label="核心城市房租">
             {data?.rents ? (
               <>
                 <button
@@ -4234,14 +4304,14 @@ export function App() {
                   }
                   className="flex w-full items-baseline justify-between gap-2 text-left"
                 >
-                  <h2 className="font-display text-lg font-semibold tracking-wide text-[#eaf3ff]">
+                  <h2 className={CARD_TITLE_CLASS}>
                     核心城市房租
                   </h2>
                   <span className="flex shrink-0 items-baseline gap-2">
-                    <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[11px] text-[var(--dim)]">
+                    <span className={CARD_BADGE_CLASS}>
                       月频发布
                     </span>
-                    <span className="text-[11px] whitespace-nowrap text-[var(--dim)]">
+                    <span className={FOLD_LABEL_CLASS}>
                       {rentsOpen ? "收起 ∧" : "展开 ∨"}
                     </span>
                   </span>
@@ -4259,7 +4329,7 @@ export function App() {
                 >
                   <div className="min-h-0 overflow-hidden">
                     {rentItems.length ? (
-                      <ul className="divide-y divide-[rgba(94,148,205,0.12)]">
+                      <ul className="divide-y divide-[var(--border)]">
                         {rentItems.map((r) => (
                           <li
                             key={r.key}
@@ -4317,10 +4387,10 @@ export function App() {
             ) : (
               <>
                 <div className="mb-3 flex items-baseline justify-between gap-2">
-                  <h2 className="font-display text-lg font-semibold tracking-wide text-[#eaf3ff]">
+                  <h2 className={CARD_TITLE_CLASS}>
                     核心城市房租
                   </h2>
-                  <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[11px] text-[var(--dim)]">
+                  <span className={CARD_BADGE_CLASS}>
                     月频发布
                   </span>
                 </div>
@@ -4380,7 +4450,7 @@ export function App() {
                 </div>
               </div>
             )}
-            <ul className="divide-y divide-[rgba(94,148,205,0.12)]">
+            <ul className="divide-y divide-[var(--border)]">
               {(vol?.indices ?? []).map((idx) => (
                 <li
                   key={idx.name}
@@ -4412,7 +4482,7 @@ export function App() {
           </BlockShell>
 
           {/* 海底光缆：全球主要系统精选 + 公开异常信号状态层（最后一个内容板块，其后是页脚行） */}
-          <section className="glass p-4 sm:p-5" aria-label="全球主要海底光缆">
+          <section className={CARD_CLASS} aria-label="全球主要海底光缆">
             <button
               type="button"
               onClick={() => setCablesOpen((v) => !v)}
@@ -4422,14 +4492,14 @@ export function App() {
               }
               className="flex w-full items-baseline justify-between gap-2 text-left"
             >
-              <h2 className="font-display text-lg font-semibold tracking-wide text-[#eaf3ff]">
+              <h2 className={CARD_TITLE_CLASS}>
                 全球主要海底光缆
               </h2>
               <span className="flex shrink-0 items-baseline gap-2">
-                <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[11px] text-[var(--dim)]">
+                <span className={CARD_BADGE_CLASS}>
                   精选 · 非全量
                 </span>
-                <span className="text-[11px] whitespace-nowrap text-[var(--dim)]">
+                <span className={FOLD_LABEL_CLASS}>
                   {cablesOpen ? "收起 ∧" : "展开 ∨"}
                 </span>
               </span>
@@ -4509,7 +4579,7 @@ export function App() {
             </div>
 
             {/* 光缆列表 */}
-            <ul className="divide-y divide-[rgba(94,148,205,0.12)]">
+            <ul className="divide-y divide-[var(--border)]">
               {visibleCables.map((c) => {
                 const inc = incidentByCable.get(c.id);
                 return (
@@ -4583,7 +4653,7 @@ export function App() {
 
             {/* 公开故障记录（历史）：红档格式验证——日期/登陆点/来源齐全 */}
             {cableIncidents.length > 0 && (
-              <div className="mt-3 border-t border-[rgba(94,148,205,0.12)] pt-3">
+              <div className="mt-3 border-t border-[var(--border)] pt-3">
                 <p className="text-xs font-medium text-[var(--text)]">
                   公开故障记录（已收录）
                 </p>
